@@ -1,0 +1,742 @@
+﻿
+arXiv:2206.02743v3
+[cs.IR]
+12 Feb 2023
+
+
+A Neural Corpus Indexer for Document Retrieval
+
+
+
+Yujing Wang1	Yingyan Hou1,2,     Haonan Wang1,3,   Ziming Miao1	Shibin Wu1,2, Hao Sun1,4,   Qi Chen1	Yuqing Xia1	Chengmin Chi1	Guoshuai Zhao1	Zheng Liu1
+Xing Xie1	Hao Allen Sun1	Weiwei Deng1	Qi Zhang1	Mao Yang1 1Microsoft  2Tsinghua University  3University of Illinois, Urbana Champaign  4Peking University
+1 {yujwang,  zimiao,  cheqi,  yuqxia,  chec,  zhengliu}@microsoft.com 1 {guzhao,  xingx,  hasun,  dedeng,  zhang.qi,  maoyang}@microsoft.com 2 {hyy20,  wusb20}@mails.tsinghua.edu.cn
+3 haonan3@illinois.edu	4 sunhao@stu.pku.edu.cn
+
+
+Abstract
+
+Current state-of-the-art document retrieval solutions mainly follow an index-retrieve paradigm, where the index is hard to be directly optimized for the ﬁnal retrieval target.  In this paper, we aim to show that an end-to-end deep neural network unifying training and indexing stages can signiﬁcantly improve the recall performance of traditional methods. To this end, we propose Neural Corpus In-dexer (NCI), a sequence-to-sequence network that generates relevant document identiﬁers directly for a designated query. To optimize the recall performance of NCI, we invent a preﬁx-aware weight-adaptive decoder architecture, and leverage tailored techniques including query generation, semantic document identiﬁers, and consistency-based regularization. Empirical studies demonstrated the superiority of NCI on two commonly used academic benchmarks, achieving +21.4% and +16.8% relative enhancement for Recall@1 on NQ320k dataset and R-Precision on TriviaQA dataset, respectively, compared to the best baseline method.
+
+
+1	Introduction
+
+Document retrieval and ranking are two key stages for a standard web search engine [56; 34]. First, the document retrieval stage retrieves candidate documents relevant to the query, and then, the ranking stage gives a more precise ranking score for each document. The ranking stage is often fulﬁlled by a deep neural network, taking each pair of query and document as input and predicting their relevance score. Nevertheless, a precise ranking model is very costly, while typically only a hundred or thousand candidates per query are affordable in an online system. As a result, the recall performance of the document retrieval stage is very crucial to the effectiveness of web search engines.
+Existing document retrieval methods can be divided into two categories, namely term-based and semantic-based approaches [22]. Term-based retrieval approaches [9; 59] build an inverted index for the entire web corpus, but they hardly capture document semantics and fail to retrieve similar documents in different wordings. Thus, semantic-based approaches [56; 36] are proposed to alleviate this discrepancy. First, they learn dense representations for both queries and documents through a twin-tower architecture; then Approximate Nearest Neighbor (ANN) search is applied to retrieve relevant documents for the designated query.  Despite of their success in real applications, these approaches can not fully leverage the power of deep neural networks for the following reasons. First, a single embedding vector has limited capacity to memorize all semantics in a document, and it performs even worse than term-based methods in the applications that heavily rely on exact match [37]. Second, the model is unable to incorporate deep query-document interactions. Because
+
+The work was done at Microsoft.
+
+36th Conference on Neural Information Processing Systems (NeurIPS 2022).
+
+ANN algorithms theoretically require a strong assumption for the Euclidean space, we have to adopt simple functions such as cosine similarity to capture the query-document interactions [20].
+Given the above limitations, several research works have explored end-to-end models that directly retrieve relevant candidates without using an explicit index. Gao et al. [20] proposed a Deep Retrieval (DR) framework for item recommendation, which learned a retrievable structure with historical user-item interactions. Nevertheless, it is more challenging to design a universal model for semantic text retrieval, as we need to leverage the power of both pre-trained language models and deep retrieval networks simultaneously. Tay et al. [50] proposed Differentiable Search Index (DSI), a text-to-text model that maps queries directly to relevant docids. To the best of our knowledge, this is the ﬁrst attempt to propose a differentiable index for semantic search.  However, the vanilla transformer decoder in DSI does not fully leverage the hierarchical structures of document identiﬁers, and the model is pruned to over-ﬁtting with limited training data. Furthermore, Bevilacqua et al. [4] proposed SEAL by leveraging all n-grams in a passage as its identiﬁers. But for long documents, it is hard to enumerate all possible n-grams. In general, the recall performance of end-to-end document retrieval remains a large room to be improved.
+In this paper, we show that the traditional text retrieval frameworks can be fundamentally changed by a uniﬁed deep neural network with tailored designs. To this end, we propose a Neural Corpus Indexer (NCI), which supports end-to-end document retrieval by a sequence-to-sequence neural network. The model takes a user query as input, generates the query embedding through the encoder, and outputs the identiﬁers of relevant documents using the decoder. It can be trained by both ground-truth and augmented query-document pairs. During inference, the top N documents are retrieved via beam search based on the decoder.  Designing and training such a model is non-trivial, so we propose several crucial techniques to ensure its effectiveness. First, to get sufﬁcient query-document pairs for training, we leverage a query generation network to obtain possible pairs of queries and documents. Second, we utilize the hierarchical k-means algorithm to generate a semantic identiﬁer for each document. Third, we design a preﬁx-aware weight-adaptive decoder to replace the vanilla one in a sequence-to-sequence architecture. Speciﬁcally, the same token will be assigned different embedding vectors at different positions in the identiﬁers, while another transformer-based adaptive module is applied to the classiﬁcation weights for token prediction in the context of a certain preﬁx. This makes the classiﬁers customized to different preﬁxes when decoding along the hierarchical tree structure. Besides, a consistency-based regularization loss is taken for training both encoder and decoder networks to mitigate the over-ﬁtting problem.
+Our NCI design solves the limitations of traditional index-retrieve pipelines from multiple perspec-tives. On one hand, a whole neural network model replaces the traditional inverted index or vector search solutions. It can be optimized end-to-end using realistic query-document pairs, which fully captures both term-based and semantic-based features and is adaptive to the changing of workloads. On the other hand, the model is able to capture deep interactions between queries and documents via the encoder-decoder attention, which enlarges the capacity of vector-based representations. Moreover, NCI achieves much better ranking results than ANN-based approaches as it is optimized directly by the ﬁnal target. Thus, it can be served as an end-to-end retrieval solution while releasing the burden of re-ranking for a long candidate list.
+In addition to the superior performance, the invention of Neural Corpus Indexer is also promising from the perspective of system design. As nowadays, ranking and query-answering modules are already implemented by neural networks, NCI ﬁnishes the last piece of puzzle for the next-generation information retrieval system based on a uniﬁed differentiable model architecture. This reduces the dependency among different sub-modules, while the processes of system deployment and maintenance could be greatly eased.
+Our contributions are highlighted as follows.
+•  For the ﬁrst time, we demonstrate that an end-to-end differentiable document retrieval model can signiﬁcantly outperform both inverted index and dense retrieval solutions. This ﬁnding will inspire research on further steps towards the next-generation search systems, for instance, unifying informational retrieval, ranking, and question answering in a single differentiable framework.
+•  We design a sequence-to-sequence model, named Neural Corpus Indexer (NCI), which generates relevant document identiﬁers directly for a speciﬁc query. In our experiments, the proposed NCI model improves the state-of-the-art performance of existing methods by a signiﬁcant margin, achieving +21.4% and +16.8% relative enhancement for Recall@1 on NQ320k dataset and
+
+
+2
+
+R-Precision on TriviaQA dataset, respectively. Also, NCI itself achieves a competitive MRR score without using an explicit ranking model.
+•  We propose a novel decoder architecture, namely preﬁx-aware weight-adaptive (PAWA) decoder, to generate document identiﬁers. As veriﬁed by ablation studies, this invention is very crucial for NCI to achieve an outstanding performance. Moreover, query generation, semantic document identiﬁers, and consistency-based regularization are all accountable for the superior capability of Neural Corpus Indexer.
+
+2	Related work
+
+In this section, we brieﬂy introduce the related works and leave more discussions in Appendix A.
+Sparse retrieval. Traditional document retrieval methods are based on Sparse Retrieval, which is built upon inverted index with term matching metrics such as TF-IDF [45], query likelihood [33] or BM25 [44].  In industry-scale web search, BM25 is a difﬁcult-to-beat baseline owing to its outstanding trade-off between accuracy and efﬁciency.  In recent years, there are some attempts to incorporate the power of neural networks into inverted index. The Standalone Neural Ranking Model (SNRM) [57] learns high-dimensional sparse representations for query and documents, which enables the construction of inverted index for efﬁcient document retrieval. Doc2Query [41] predicts relevant queries to augment the content of each document before building the BM25 index, and DocT5Query [40] improves the performance of query generation by the pre-trained language model T5 [5]. Furthermore, DeepCT [9] calculates context-aware term importance through neural networks to improve the term matching metrics of BM25.
+Dense retrieval. Another line of research lies in Dense Retrieval, which presents query and docu-ments in dense vectors and models their similarities with inner product or cosine similarity. These methods beneﬁt from recent progresses of pre-trained language models, such as BERT [14] and RoBERTa [35] to obtain dense representations for queries and documents. At inference time, efﬁcient Approximate Nearest Neighbor (ANN) search algorithms, such as k-dimensional trees [3], locality-sensitive hashing [10], and graph-based indexes (e.g., HNSW [38], DiskANN [27] and SPANN [7]) can be utilized to retrieve relevant documents within a sublinear time.  Besides, Luan et al. [37] analyze the limited capacity of dual encoders, and propose a combination of sparse and dense retrieval methods with multi-vector encoding to achieve better search quality.
+Autoregressive retrieval.  The other way to approach retrieval is utilizing an end-to-end autore-gressive model. Firstly, several efforts have been done on entity linking [13; 12; 11], which can be regarded as a special type of retrieval task, e.g., using an entity to ask the posed question. Recently, different from the entity linking task, Tay et al. [50] proposed the DSI (differentiable search index) model to generate relevant document identiﬁers directly corresponding to the query.  Bevilacqua et al. [4] employed the autoregressive model to generate relevant words for a query and utilize the generated string to retrieve relevant documents. Besides, the Deep Retrieval (DR) [20] approach for recommendation is also related to this category, which learns a deep retrievable network with user-item clicks and gets rid of the ANN algorithms based on the Euclidean space assumption.
+Pre-trained language models. Recently, pre-trained Language Models (LMs), such as BERT [14] and RoBERTa [35], have led to a revolution in web search techniques. The representation vectors for all documents can be calculated and indexed ofﬂine. In the online serving stage, it calculates the representation vector for the input query, and applies a crossing layer to calculate the relevance score between each query and document pair. The crossing layer usually adopts simple operators such as cosine similarity or a single feed-forward layer to retain a high efﬁciency. Gao et al. [16] found that a standard LMs’ internal attention structure is not ready-to-use for dense encoders and proposed the Condenser to improve the performance of dense retrieval.  Moreover, ANCE [54] leverages hard negatives to improve the effectiveness of contrastive learning, which generates better text representations for the retrieval tasks.
+
+3	Neural corpus indexer
+
+The neural corpus indexer (NCI) is a sequence-to-sequence neural network model.  The model takes a query as input and outputs the most relevant document identiﬁer (docid), which can be trained by a large collection of <query, docid> pairs. The documents are encoded into semantic
+
+
+3
+
+
+
+
+
+
+
+
+Figure 1: Overview of Neural Corpus Indexer (NCI). (a) Preprocessing. Each document is represented by a semantic identiﬁer via hierarchical k-means. (b) Query Generation. Queries are generated for each document based on the content. (c) The training pipeline of NCI. The model is trained over augmented <query, docid> pairs through a standard transformer encoder and the proposed Preﬁx-Aware Weight-Adaptive (PAWA) Decoder.
+
+
+docids by the hierarchical k-means algorithm [23], which makes similar documents have “close” identiﬁers in the hierarchical tree. As shown in Figure 1, NCI is composed of three components, including Query Generation, Encoder, and Preﬁx-Aware Weight-Adaptive (PAWA) Decoder. Query generation is implemented by a sequence-to-sequence transformer model [52] that takes as input the document terms and produces a query as output [41]. The encoder, following the standard transformer
+architecture, is composed of M1 stacked transformer blocks, which outputs the representation for an input query. For the decoder network, we stack M2 transformer layers. To better align with the
+hierarchical nature of the semantic identiﬁers, we propose a weight adaptation mechanism based on another transformer to make the decoder aware of semantic preﬁxes. At inference time, the top N relevant documents can be easily obtained via beam search.  Due to the hierarchical property of semantic identiﬁers, it is easy to constrain the beam search on the preﬁx tree so that only valid identiﬁers will be generated.
+
+3.1    Representing document with semantic identiﬁers
+
+NCI generates document identiﬁers solely based on the input query without explicit document content, which is difﬁcult when the size of the corpus is very large. Thus, we aim to inject useful priors into the identiﬁers so that the semantic information of documents can be incorporated in the decoding process. In other words, we hope the documents with similar semantics have close docids to facilitate the learning process of NCI. To achieve this, we leverage the hierarchical k-means algorithm to encode documents. As shown in Figure 1(a), given a collection of documents to be indexed, all documents are ﬁrst classiﬁed into k clusters by using their representations encoded by BERT [14]. For cluster with more than c documents, the k-means algorithm is applied recursively. For each cluster containing c documents or less, each document is assigned a number starting from 0 to at most c-1. In this way, we
+organize all documents into a tree structure T with root r0. Each document is associated with one leaf node with a deterministic routing path l = fr0;r1;:::;rmg from the root, where ri  2 [0;k) represents the internal cluster index for level i, and rm  2 [0;c) is the leaf node. The semantic identiﬁer for a
+document is concatenated by the node indices along the path from root to its corresponding leaf node. For documents with similar semantics, the preﬁxes of their corresponding identiﬁers are likely to be the same. For simplicity, we set k = 30 and c = 30 in all experiments, leaving the optimization of these hyper-parameters to future work. The detailed procedure of hierarchical k-means will be described in Algorithm 1 in the Appendix B.2.
+
+3.2    Query generation
+
+One challenge of generating document identiﬁers by single query input is how to make the identiﬁers aware of the document semantics. Since the content of each document is not explicitly known at inference, it must be incorporated into the model parameters during training. To facilitate the training process, we generate a bunch of queries with a query generation module and bind the information of document content through training the sequence-to-sequence model with generated queries and their corresponding document identiﬁers. In NCI, we utilize two kinds of augmented queries:
+DocT5Query. We adopt a standard sequence-to-sequence transformer [52] based on the implementa-tion of DocT5Query [1] pre-trained by a large query-document corpus. It takes as input the document terms and produces relevant queries via random sampling. Note that we use random sampling instead of beam search to ensure the diversity of generated queries.
+
+
+4
+
+Document As Query. Like DSI [50], we also utilize the ﬁrst 64 terms for each document as queries. Besides, we randomly selected 10 groups of 64 consecutive terms from the whole article as additional queries. This makes the NCI model aware of the semantic meaning of each document.
+
+3.3    Preﬁx-aware weight-adaptive decoder
+
+
+Given an input query x, the probability of generating a document identiﬁer can be written as:
+Y
+m
+p(ljx;) =		p(rijx;r1;r2;:::;ri   1;i); i=1
+
+
+
+(1)
+
+where ri  is the i-th token in the current identiﬁer; x is the representation output from encoder; 
+denotes the total parameters and i is the parameter for the i-th step.
+This probability can be modeled by a transformer-based decoder. For an internal node with level i, the probabil-ity is calculated by:
+hi  = TransformerDecoder(x;h1;h2;:::;hi   1;i); (2)
+p(rijx;r1;r2;:::;ri   1;i) = Softmax(hiW):	(3)
+
+Here hi is the hidden representation for step i, which
+is calculated by a multi-head attention over encoder representation x and token representations of previous
+decoding steps. The linear classiﬁcation weight is de-
+noted by W  2 Rdv, d is the hidden dimension size and v is the vocabulary size of identiﬁers.
+
+
+
+
+
+Figure 2: Overview of the Preﬁx-Aware Weight-Adaptive (PAWA) Decoder.
+
+As the encoder and decoder utilize distinct vocabulary spaces, we do not share the embedding space for their tokens. Different from a standard decoding task, the meanings of the same token appearing at different places of the same identiﬁer are different, as they correspond to different clusters in the
+hierarchical tree structure. For instance, the “52” and “53” of the same identiﬁer “315253” correspond
+to different semantic meanings. Moreover, the same token in the same position may have different
+semantics with different preﬁxes.  For example, in identiﬁers “111253” and ”214253”, the same token “53” has different semantics in two different identiﬁers, as they are routed from different preﬁx
+paths. These two properties of the hierarchical semantic identiﬁers motivate us to design the novel Preﬁx-Aware Weight-Adaptor (PAWA) decoder.
+Unlike  a  standard  transformer  decoder,   the  probabilities  at  different  tree  levels,   such  as
+p(rijx;r1::i   1;i) and p(rjjx;r1::j   1;j) where i = j, do not share parameters with each other.
+To distinguish different semantic levels, we concatenate the position and token values as input for each decoding step, as shown in the left corner of Figure 2. Speciﬁcally, we have “(1;3)(2;5)(3;5)”
+for the semantic identiﬁer “315253”, while “(2;5)” and “(3;5)” represent different tokens in the
+vocabulary space. As the token embedding and linear classiﬁcation layers share the same weights, the same token value in different positions would correspond to different model parameters. Moreover, to reﬂect the inﬂuence of different preﬁxes, we expect the linear classiﬁcation layer to be aware of different preﬁxes for predicting a speciﬁc token. Concretely, instead of using the same projection weight W in the linear classiﬁcation layer, we employ the preﬁx-aware adaptive weights for each token classiﬁer, which can be calculated by another transformer decoder,
+Wada  = AdaptiveDecoder(e;r1;r2;:::;ri   1)Wi	(4)
+i
+where e is the query embedding vector taken as initial input to the transformer decoder; frtjt 2
+(1;2;:::;i   1)g are preﬁx tokens before the i-th position, AdaptiveDecoder stacks M3 transformer de-
+i
+coding layers with dimension d, and Wada  2 Rdv is the adapted weight matrix for the corresponding
+i
+classiﬁer. Finally, the i-th token in the given preﬁx can be predicted by Softmax(hiWada).
+For instance, to predict the third tokens in the identiﬁers “(1,3)(2,1)(3,5)” and “(1,2)(2,4)(3,5)”, respectively, the corresponding adaptive weights are derived separately for different preﬁxes, i.e., “(1,3)(2,1)” and “(1,2)(2,4)”. As we already know the previous tokens for each position in the teacher forcing setting, the preﬁx-aware adaptive weights can be calculated and trained in parallel in different positions while adding little burden to the entire model.
+
+
+5
+
+3.4    Training and inference
+Consistency-based  regularization.    To  alleviate  over-ﬁtting,  we  employ  a  consistency-based regularization  loss  for  training  each  decoding  step.    Given  an  input  query  q,  we  denote  the decoder representations by two forward passes with independent dropouts before Softmax as
+zi;1  = D(rijE(q);r1;:::;i   1;i) and zi;2  = D(rijE(q);r1;:::;i   1;i), respectively, where E() de-
+notes the encoder network and D() denotes the decoder network. The consistency-based regulariza-tion loss tries to distinguish the representations from the same token from those of other tokens, like contrastive learning [8]. The regularization loss of query q for the i-th decoding step is deﬁned as,
+
+
+exp(sim(zi;1;zi;2)=)
+reg	k=1;k=2 exp(sim((zi;1;zi;k)=)
+L	=     log
+P
+2Q
+
+
+(5)
+
+where we leverage dot-product for sim(); Q is the number of queries in the batch, and the temperature parameter is set as  = 1 in all the experiments.
+Training loss. Given a set of training examples D = f(q;d)g composed of queries (training queries and augmented queries) and document identiﬁers, the loss function can be written as follows:
+L() =    X     log p(djE(q);) + Lreg;	(6)
+(q;d)2D
+
+where p(djE(q);) denotes the probability of generating d with q as the input.  The ﬁrst part is the seq2seq cross-entropy loss with teacher forcing and the second part is the consistency-based regularization loss summed by all decoding steps.  The whole process formulates a sequence-to-sequence neural network, which can be optimized end-to-end via gradient descent.  The hyper-parameter  denotes a scaling factor of regularization loss, which will be analyzed in Section 4.4.
+Inference via beam search. In the inference stage, we calculate the query embedding through the encoder network and then perform beam search on the decoder network. Due to the hierarchical nature of docid, it is convincing to constrain the beam search decoding process with a preﬁx tree, which in turn only generates the valid identiﬁers. The time complexity of beam search is O(LBF), where L is the max length of identiﬁers (the depth of tree), B is the beam size and F is the max fanout of the tree (30 in our experiments). Given a balanced tree structure built by a corpus with N documents, the average time complexity for beam search is O(BlogN). We leave detailed descriptions of the constrained beam search algorithm in Appendix B.3.
+
+4	Experiments
+
+In this section, we empirically verify the performance of NCI and the effectiveness of each component on the document retrieval task, which generates a ranking list of documents in response to a query. In the following, we discuss the datasets and evaluation protocols in Section 4.1, describe the implementation details and baseline methods in Section 4.2, and present empirical results and analyses in Section 4.3 and 4.4, respectively.
+
+4.1    Datasets & evaluation metrics
+Datasets. We conduct our experiments on two popular benchmarks for document retrieval, i.e., the Natural Questions [32] and TriviaQA dataset [29].  Natural Questions (NQ) [32] was introduced by Google in 2019.  The version we use is often referred to as NQ320k, which consists of 320k query-document pairs, where the documents are gathered from Wikipedia pages and the queries are natural language questions. We use its predetermined training and validation split for evaluation. TriviaQA is a reading comprehension dataset [29], which includes 78k query-document pairs from the Wikipedia domain. Unlike the NQ320k dataset, a query may include multiple answers in TriviaQA.
+Metrics.  We use widely accepted metrics for information retrieval, including Recall@N, Mean Reciprocal Rank (MRR) and R-precision. Recall@N measures how often the desired document is hit by the top-N retrieved candidates. MRR calculates the reciprocal of the rank at which the ﬁrst relevant document is retrieved. R-Precision is the precision after R documents have been retrieved, where R is the number of relevant documents for the query. A high recall means that the ground truth document is contained in the retrieved candidate list, while a high MRR indicates that the corresponding document has already been ranked at the top position without re-ranking.
+
+
+6
+
+4.2    Implementation details
+
+Hierarchical semantic identiﬁer. For semantic identiﬁers, we apply a hierarchical k-means algo-rithm over the document embeddings obtained through a 12-layers BERT model with pre-trained parameters (provided by HuggingFace [53]).  For each hierarchical layer, we employ the default k-means algorithm implemented in scikit-learn [42] with k  = 30.  For simplicity, the recursion terminal condition is also set as c = 30.
+Query generation.  We leverage the pre-trained model, DocT5Query [40], for query generation. We provide all document contents in NQ320k and TriviaQA datasets to predict augmented query-document pairs. For each document, we generate 15 queries with the ﬁrst 512 tokens of the document as input and constrain the maximum length of the generated query as 64.
+Training and inference. The Neural Corpus Indexer is implemented with python 3.6.10, PyTorch 1.8.1 and HuggingFace transformers 3.4.0. We utilize the parameters of the T5 pre-trained model [5]
+to initialize the encoder and randomly initialize the PAWA decoder. All NCI experiments are based
+on a learning rate 2  10   4 for the encoder and 1  10   4 for the decoder with a batch size 16 per GPU. We set the scaling factor of the consistency-based regularization loss as  = 0:15 and the dropout ratio as 0:1. For inference, we apply the partial beam search algorithm to the trained seq2seq model. We set the length penalty and the beam size as 0:8 and 100, respectively. All experiments are based on a cluster of NVIDIA V100 GPUs with 32GB memory. Each job takes 8 GPUs, resulting in a total batch size of 128 (16  8).
+Baselines. We evaluate BM25 on both raw documents and those augmented by DocT5Query by an open-source implementation [2]. The performance of DSI [49] is referred from its original paper as the implementation has not been ofﬁcially open-sourced. To avoid the difference in data processing, we reproduce SEAL [4] and ANCE [54] by their ofﬁcial implementations. Some baselines for the TriviaQA dataset are directly referred from [58]. We leave the detailed settings in Appendix B.4.
+
+
+4.3    Results
+
+In Table 1 and 2, we compare the empirical results of NCI and corresponding baselines on two benchmarks. We report NCI models based on T5-Base, T5-Large, and ensemble architectures. One can see that even with the T5-Base architecture, NCI outperforms all baselines by a signiﬁcant margin across four different metrics on both the NQ320k and TriviaQA datasets.  Furthermore, an ensemble of ﬁve NCI models also brings a large enhancement, because each model is trained individually with a separate semantic identiﬁer generated by a random k-means initialization, making the models complementary to each other. Expect for NCI, SEAL achieves the second best perfor-mance. This veriﬁes the superiority of deep text retrieval over traditional sparse and dense retrieval methods. Comparing to SEAL, NCI improves 17:6% for Recall@1, 10:0% for Recall@10, 3:2% for Recall@100, and 14:9% for MRR@100 on the NQ320k dataset. We ﬁnd that the generated queries have different distributions with the training queries , so we also ﬁne-tune Doc2Query on this dataset for a comparison (denoted by w/ qg-ft). Finally, we achieve 72.78% for Recall@1, outperforming SEAL by 21.4%. On the TriviaQA dataset, NCI obtains 7:9% improvement for Recall@5, 5:5% for Recall@20, 6:0% for Recall@100, and 16:8% for R-Precision. As shown in ablation studies, these improvements are owning to the novel designs of PAWA decoder, query generation, semantic identiﬁers, and consistency-based regularization. We also notice that query generation plays a key role in boosting the retrieval performance. With query generation, the BM25 + DocT5Query method achieves higher performance than the vanilla BM25, especially on the NQ320k dataset.  ANCE achieves competitive performance after ﬁne-tuned by the training pairs, but the performance is relatively lower than our NCI model. Moreover, the MRR@100 and R-Precision metrics of NCI are outstanding, indicating that 80% of the queries can be fulﬁlled without re-ranking on the retrieved document list. This demonstrates the potential of NCI to be served as an end-to-end solution that replaces the entire index-retrieve-rank pipeline in traditional web search engines.
+Furthermore, to study the effect of each component, we report ablation results on both NQ320k and TriviaQA datasets in Table 3. In general, all ﬁve components are able to improve the performance of document retrieval, which are detailed below.
+w/o DocT5Query.   This conﬁguration removes the training queries generated by DocT5Query. According to the results, the query generation model greatly boosts the performance. The result is
+
+
+7
+
+Table 1: Performance comparison on NQ320k retrieval task. The settings with qg-ft refer to query generation by the DocT5Query model ﬁne-tuned on this dataset. Other settings use the original checkpoint of DocT5Query.
+
+
+Method
+Neural Corpus Indexer (Base) Neural Corpus Indexer (Large) Neural Corpus Indexer (Ensemble)
+Neural Corpus Indexer w/ qg-ft (Base) Neural Corpus Indexer w/ qg-ft (Large)
+Neural Corpus Indexer w/ qg-ft (Ensemble)
+DSI (Base) [50] DSI (Large) [50] DSI (XXL) [50] SEAL (Base) [4] SEAL (Large) [4] ANCE (FirstP) [54] ANCE (MaxP) [54]
+BERT + BruteForce [15] BERT + ANN (Faiss) [28] BM25 + DocT5Query [40] BM25 [44]
+
+Recall@1
+65.86 66.23 70.46 68.91 68.65 72.78
+27.40 35.60 40.40 56.98 59.93 51.33 52.63 28.65 27.92 35.43 15.11
+
+Recall@10
+85.20 85.27 89.35 88.48 88.45 91.76
+56.60 62.60 70.30 79.97 81.24 80.33 80.38 53.42 53.63 61.83 32.48
+
+Recall@100
+92.42 92.49 94.75 94.48 94.53 96.22
+– – –
+91.39 90.93 91.78 91.31 73.16 73.01 76.92 50.54
+
+MRR@100
+73.12 73.37 77.82 76.17 76.10 80.12
+– – –
+65.48 67.70 61.71 62.84 36.60 37.08 44.47 21.07
+
+
+Table 2: Performance comparison on TriviaQA retrieval task. The results annotated by * are taken from [58].
+
+
+Method
+Neural Corpus Indexer (Base) Neural Corpus Indexer (Large)
+Neural Corpus Indexer (Ensemble)
+SEAL (Base) [4] SEAL (Large) [4] AR2-G*[58] coCondenser*[18] Condenser*[17] Individual Top-k*[46] Joint Top-k*[46] RDR*[55] ANCE*[54] DPR*[30]
+GAR*[39]
+BM25 + DocT5Query [40] BM25 [44]
+
+Recall@5
+90.49 91.73 94.60
+86.3 87.7 78.2 76.8 – 76.8 74.1 ---
+73.1 59.71 56.91
+
+Recall@20
+94.45 95.17 96.89
+90.5 91.8 84.4 83.2 81.9 83.1 81.3 82.5 80.3 79.3 80.4 72.06 69.45
+
+Recall@100
+96.94 97.44 98.20
+91.5 92.6 87.9 87.3 86.2 87.0 86.3 87.3 85.3 84.9 85.7 82.71 80.24
+
+R-Precision
+73.90 74.94 80.84
+68.1 69.2 – – –
+
+
+----
+39.66 37.29
+
+
+
+aligned with our expectation because training with augmented queries allows the NCI model to better understand the semantic meanings of each document.
+w/o document as query. Similar to DSI [49], using the document contents as queries also makes the model aware of the semantics of documents.
+w/o PAWA decoder.  This conﬁguration removes the adaptive decoder layer in Equation (4) and leverages shared weights with token embedding for the linear classiﬁcation layer. We notice that the preﬁx-aware weight-adaptive decoder has a noticeable inﬂuence on the performance, which indicates that, instead of borrowing the vanilla transformer decoder, it is necessary to design a tailored decoder architecture for the task of semantic identiﬁer generation.
+
+
+Table 3: Ablation Study on NQ320k and TriviaQA retrieval task.
+
+
+Method
+
+NQ320k	TriviaQA
+Recall@1   Recall@10   Recall@100   MRR@100   Recall@5   Recall@20   Recall@100   R-Precision
+
+
+
+Neural Corpus Indexer (Base)	65.86	85.20	92.42 w/o DocT5Query	60.23	80.20	90.92 w/o document as query	62.49	81.21	88.85 w/o PAWA decoder	63.36	83.06	91.47 w/o semantic id	62.75	83.88	91.01 w/o regularization	65.07	82.91	90.65 w/o constrained beam search	65.65	84.89	92.23
+
+73.12	90.49	94.45	96.94	73.90 67.89	84.56	90.94	95.32	63.50 69.41	85.34	91.10	94.66	67.48 70.56	88.75	93.56	96.18	71.81 70.43	88.91	93.07	95.80	72.57 71.80	89.01	93.63	96.16	71.59 72.79	89.58	93.97	96.61	72.51
+
+
+8
+
+Recall@5
+
+
+0.6
+0.5
+Recall@1
+0.4
+0.3
+0.2
+0.1
+
+
+
+
+
+Small Base
+Large
+
+0.9
+0.8
+0.7
+0.6
+0.5
+0.4
+0.3
+
+
+
+
+
+Small Base
+Large
+
+0	2000	4000	6000	8000	0	1000      2000      3000      4000      5000 Step                                                                                                                                                        Step
+Figure 3: Learning curves of NCI with different model capacities. Left: NQ320k; Right: TriviaQA.
+
+
+w/o semantic id. This conﬁguration replaces the semantic identiﬁer of each document to a randomly generated one. We ﬁnd a relative drop in the model performance on all four metrics, demonstrating that the semantic identiﬁers derived by the hierarchical k-means have injected useful priors.  We conjecture that the performance enhancement would be more signiﬁcant on a larger document corpus.
+w/o regularization. There is a performance drop on all four metrics without using consistency-based regularization loss. The reason is that the decoder network is prone to over-ﬁtting. By making the prediction results of two augmented queries consistent, the decoder will become more generalizable and resistant to over-ﬁtting.
+w/o constrained beam search. This conﬁguration disables the validating constraint in beam search. In other words, the decoder network does not have a tree-based prior structure. Instead, all tokens in the vocabulary can be generated in each decoding step. We observe a performance drop on four evaluation metrics. This indicates that it is difﬁcult to remember all information of valid identiﬁers in the network, and an explicit prior could be helpful for improving the quality of beam search.
+
+Table 4: NCI with different number of layers in PAWA adapter. Left: NQ320k; Right: TriviaQA.
+
+
+Setting	Recall@1  Recall@10  Recall@100  MRR@100 #layer = 0       63.36	83.06	91.47	70.56 #layer = 1       64.85	84.71	91.49	71.42 #layer = 2       65.40	85.12	92.82	72.83 #layer = 4       65.86	85.20	92.42	73.12 #layer = 6       65.07	83.91	91.65	71.80 #layer = 8       63.60	83.11	91.78	71.22
+
+Setting	Recall@5 Recall@20 Recall@100 R-Precision #layer = 0       88.75	93.56	96.18	71.81 #layer = 1       89.16	93.90	96.58	70.77 #layer = 2       89.89	94.35	96.86	72.89 #layer = 4       90.49	94.45	96.94	73.90 #layer = 6       89.76	94.31	96.76	73.32 #layer = 8       87.90	93.30	96.20	70.75
+
+
+
+4.4    Analysis
+Model capacity.  Figure 3 compares the learning curves of NCI with different model capacities, which are identical to the small, base, and large settings of ordinary T5 [43]. We observe that with the increase of model size, NCI convergences more quickly with fewer epochs. At convergence, the small model achieves a relatively lower recall. Instead, both the base and large models achieve similar results after sufﬁcient training epochs, and the large model will be slightly higher.  This implies that the model capacity has a critical impact on the retrieval performance, and the capacity of base model seems to be enough to memorize all documents in NQ320k and TriviaQA datasets. The large model can be used when the computation capacity is sufﬁcient. For a larger corpus, one may need to increase the model size to obtain satisfactory performance.
+Layer number of PAWA adapter. We study the inﬂuence of the number of transformer layers in the PAWA adapter and choose the layer number from {0,1,2,4,6,8}. The results are summarized in Table 4. We notice that with the increase of layer number, i.e. from 0 to 4, the overall performance is consistently improved on four metrics. But when the number of layers achieves 6, the performance decreases. When continuing to increase the number of layers to 8, the performance drops signiﬁcantly. We attribute that to the overﬁtting issue caused by a large PAWA decoder. Therefore, we adopt the PAWA decoder with a 4-layers adapter in NCI.
+Retrieved documents and their semantics identiﬁers. To verify the effectiveness of retrieval as well as the semantic identiﬁers learned by the hierarchical k-means, we analyze the retrieval results of NCI for some exemplar queries. To illustrate, we select four queries denoted by A-1, A-2, B-1 and B-2, where two queries inside the same group are semantically similar, and the queries in different groups correspond to distinct topics. In Figure 4, we show the probabilities of retrieved documents
+
+
+9
+
+Probability
+
+
+0.30
+A-1: when did the eagles last play in a superbowl
+A-2: when did the eagles play in the superbowl 0.25
+
+0.20
+
+0.15
+Probability
+
+0.10
+
+0.05
+
+0.200
+B-1: latest season on keeping up with the kardashians 0.175	B-2: latest series of keeping up with the kardashians
+0.150
+
+0.125
+
+0.100
+
+0.075
+
+0.050
+
+0.025
+
+
+0.00	0.000
+1377    4254    4299    4361    6030    6032    6033    6034    6046    7860                                                                       4221    7046    7049    7382    7388    7511    7514    7516    7524    7567 Semantic Id Prefix                                                                                                           Semantic Id Prefix
+Figure 4:  Analyses of retrieved documents with semantic identiﬁers.  Left:  The probabilities of retrieved documents for Query Group A; Middle: The probabilities for Query Group B; Right: The t-SNE visualization of BERT-based document embeddings.
+
+
+for each query in group A and B, respectively. The digits along x-axis denote the four-bit preﬁxes for the semantic identiﬁers of retrieved documents, and the y-axis stands for their probabilities. We notice that similar queries result in close document distributions, while dissimilar queries in different groups result in un-overlapped document collections. In addition, the documents retrieved by the same group of queries have close preﬁxes for the identiﬁers, e.g., 6030, 6032, 6033, 6034 in group A and 7511, 7514, 7516 in group B. Also, we visualize the BERT-based document embeddings by t-SNE [51] in Figure 4, in which each color represents the corresponding documents for a speciﬁc query. As shown in the ﬁgure, these documents naturally form two clusters with respect to different query groups. Thus, we conclude that the semantic document identiﬁers generated by the hierarchical k-means algorithm have positive effects on the retrieval performance.
+Efﬁciency Analysis. We use an NVIDIA V100-32G GPU
+to analyze the efﬁciency of NCI. As the inference speed is	Table 5: Efﬁciency analysis
+inﬂuenced by both model capacity and beam size, we report	Model      Beam      Latency      Throughput the latency and throughput measures for multiple settings	size	size	(ms)	(queries / s) in Table 5. As NCI is an end-to-end retrieval method and
+Small	10	78.46	58.48
+Base	10	115.17	52.55
+achieves competitive performance without re-ranking, the           Large           10          188.60              43.39 latency and throughput are already affordable for some           Small         100         216.01               6.12
+near-real-time applications. The latency of NCI is on par	Base	100	269.31	5.62
+with DSI and SEAL using the same model size and beam	Large	100	356.07	4.75
+size, because all of them conduct beam search based on transformer decoders. BM25 is very efﬁcient (<100ms per query on CPU using an open-source implementation [2]), but the recall metrics are much lower. Furthermore, we can leverage other techniques to improve the efﬁciency of NCI, which will be discussed in the later section.
+
+5	Limitation & Future Works
+Despite the signiﬁcant breakthrough, the current implementation of NCI still suffers from several limitations before deployment in a large-scale search system. Firstly, it requires a much larger model capacity for extending NCI to the web scale. Secondly, the inference speed needs to be improved to serve online queries in real time. Thirdly, it is difﬁcult to update the model-based index when new documents are added to the system. In future works, we may tackle these problems from four aspects. (1) The architecture of sparsely-gated Mixture of Expert (MoE) [47] can be employed to enhance the model capacity. (2) Documents can be grouped into semantic clusters, and NCI can be used to retrieve relevant cluster identiﬁers. In this way, all documents in relevant clusters can be retrieved efﬁciently. (3) Model compression techniques, like weight quantization [26] and knowledge distillation [24], can be further taken to speed up inference. (4) We plan to explore a hybrid solution by building another index that serves new documents through traditional indexing algorithms.
+
+6	Conclusion
+In this work, we introduce a novel document retrieval paradigm that uniﬁes the training and indexing stages by an end-to-end deep neural network. The proposed Neural Corpus Indexer (NCI) directly retrieves the identiﬁers of relevant documents for an input query, which can be optimized end-to-end using augmented query-document pairs. To optimize the recall and ranking performance, we invent a tailored preﬁx-aware weight-adaptive decoder.  Empirically, we evaluate NCI on NQ320k and TriviaQA datasets, demonstrating its outstanding performance over state-of-the-art solutions.
+
+
+10
+
+References
+[1]  https://github.com/castorini/docTTTTTquery.
+
+[2]  https://github.com/castorini/anserini.
+
+[3]  Jon Louis Bentley.   Multidimensional binary search trees used for associative searching. Communications of the ACM, 18(9):509–517, 1975.
+
+[4]  Michele Bevilacqua, Giuseppe Ottaviano, Patrick Lewis, Wen-tau Yih, Sebastian Riedel, and Fabio Petroni. Autoregressive search engines: Generating substrings as document identiﬁers. arXiv preprint arXiv:2204.10628, 2022.
+
+[5]  Tom B Brown, Benjamin Mann, Nick Ryder, Melanie Subbiah, Jared Kaplan, Prafulla Dhariwal, Arvind Neelakantan, Pranav Shyam, Girish Sastry, Amanda Askell, et al. Language models are few-shot learners. arXiv preprint arXiv:2005.14165, 2020.
+
+[6]  Wei-Cheng Chang, X Yu Felix, Yin-Wen Chang, Yiming Yang, and Sanjiv Kumar. Pre-training tasks for embedding-based large-scale retrieval.   In International Conference on Learning Representations, 2019.
+
+[7]  Qi Chen, Bing Zhao, Haidong Wang, Mingqin Li, Chuanjie Liu, Zengzhong Li, Mao Yang, and Jingdong Wang.  Spann: Highly-efﬁcient billion-scale approximate nearest neighbor search. arXiv preprint arXiv:2111.08566, 2021.
+
+[8]  Ting Chen, Simon Kornblith, Mohammad Norouzi, and Geoffrey Hinton. A simple framework for contrastive learning of visual representations.   In International conference on machine learning, pages 1597–1607. PMLR, 2020.
+
+[9]  Zhuyun Dai and Jamie Callan. Context-aware sentence/passage term importance estimation for ﬁrst stage retrieval. arXiv preprint arXiv:1910.10687, 2019.
+
+[10]  Mayur Datar, Nicole Immorlica, Piotr Indyk, and Vahab S Mirrokni. Locality-sensitive hashing scheme based on p-stable distributions. In Proceedings of the twentieth annual symposium on Computational geometry, pages 253–262, 2004.
+
+[11]  Nicola De Cao, Wilker Aziz, and Ivan Titov. Highly parallel autoregressive entity linking with discriminative correction. arXiv preprint arXiv:2109.03792, 2021.
+
+[12]  Nicola De Cao, Gautier Izacard, Sebastian Riedel, and Fabio Petroni. Autoregressive entity retrieval. arXiv preprint arXiv:2010.00904, 2020.
+
+[13]  Nicola De Cao, Ledell Wu, Kashyap Popat, Mikel Artetxe, Naman Goyal, Mikhail Plekhanov, Luke Zettlemoyer, Nicola Cancedda, Sebastian Riedel, and Fabio Petroni. Multilingual autore-gressive entity linking. arXiv preprint arXiv:2103.12528, 2021.
+
+[14]  Jacob Devlin, Ming-Wei Chang, Kenton Lee, and Kristina Toutanova.  Bert: Pre-training of deep bidirectional transformers for language understanding. arXiv preprint arXiv:1810.04805, 2018.
+
+[15]  Jacob Devlin, Ming-Wei Chang, Kenton Lee, and Kristina Toutanova.   Bert:  Pre-training of deep bidirectional transformers for language understanding.  In Proceedings of the 2019 Conference of the North American Chapter of the Association for Computational Linguistics: Human Language Technologies, Volume 1 (Long and Short Papers), pages 4171–4186, 2019.
+
+[16]  Luyu Gao and Jamie Callan.  Condenser: a pre-training architecture for dense retrieval.  In Proceedings of the 2021 Conference on Empirical Methods in Natural Language Processing, pages 981–993, 2021.
+
+[17]  Luyu Gao and Jamie Callan. Is your language model ready for dense representation ﬁne-tuning. arXiv preprint arXiv:2104.08253, 2021.
+
+[18]  Luyu Gao and Jamie Callan. Unsupervised corpus aware language model pre-training for dense passage retrieval. arXiv preprint arXiv:2108.05540, 2021.
+
+
+11
+
+[19]  Luyu Gao, Zhuyun Dai, and Jamie Callan.  Coil: Revisit exact lexical match in information retrieval with contextualized inverted list.   In Proceedings of the 2021 Conference of the North American Chapter of the Association for Computational Linguistics: Human Language Technologies, pages 3030–3042, 2021.
+
+[20]  Weihao Gao, Xiangjun Fan, Chong Wang, Jiankai Sun, Kai Jia, Wenzhi Xiao, Ruofan Ding, Xingyan Bin, Hui Yang, and Xiaobing Liu. Deep retrieval: Learning a retrievable structure for large-scale recommendations. arXiv preprint arXiv:2007.07203, 2020.
+
+[21]  Jiafeng Guo, Yixing Fan, Qingyao Ai, and W Bruce Croft. A deep relevance matching model for ad-hoc retrieval. In Proceedings of the 25th ACM international on conference on information and knowledge management, pages 55–64, 2016.
+
+[22]  Tonglei Guo, Jiafeng Guo, Yixing Fan, Yanyan Lan, Jun Xu, and Xueqi Cheng. A comparison between term-based and embedding-based methods for initial retrieval. In China Conference on Information Retrieval, pages 28–40. Springer, 2018.
+
+[23]  John A Hartigan and Manchek A Wong. Algorithm as 136: A k-means clustering algorithm. Journal of the royal statistical society. series c (applied statistics), 28(1):100–108, 1979.
+
+[24]  Geoffrey Hinton, Oriol Vinyals, Jeff Dean, et al. Distilling the knowledge in a neural network. arXiv preprint arXiv:1503.02531, 2(7), 2015.
+
+[25]  Po-Sen Huang, Xiaodong He, Jianfeng Gao, Li Deng, Alex Acero, and Larry Heck. Learning deep structured semantic models for web search using clickthrough data.   In Proceedings of the 22nd ACM international conference on Information & Knowledge Management, pages 2333–2338, 2013.
+
+[26]  Benoit Jacob, Skirmantas Kligys, Bo Chen, Menglong Zhu, Matthew Tang, Andrew Howard, Hartwig Adam, and Dmitry Kalenichenko. Quantization and training of neural networks for efﬁcient integer-arithmetic-only inference. In Proceedings of the IEEE conference on computer vision and pattern recognition, pages 2704–2713, 2018.
+
+[27]  Suhas Jayaram Subramanya, Fnu Devvrit, Harsha Vardhan Simhadri, Ravishankar Krishnawamy, and Rohan Kadekodi. Diskann: Fast accurate billion-point nearest neighbor search on a single node. Advances in Neural Information Processing Systems, 32, 2019.
+
+[28]  Jeff Johnson, Matthijs Douze, and Hervé Jégou.  Billion-scale similarity search with GPUs. IEEE Transactions on Big Data, 7(3):535–547, 2019.
+
+[29]  Mandar Joshi,  Eunsol Choi,  Daniel S Weld,  and Luke Zettlemoyer.    Triviaqa:   A large scale  distantly  supervised  challenge  dataset  for  reading  comprehension.	arXiv  preprint arXiv:1705.03551, 2017.
+
+[30]  Vladimir Karpukhin, Barlas Oguz, Sewon Min, Patrick Lewis, Ledell Wu, Sergey Edunov, Danqi Chen, and Wen-tau Yih. Dense passage retrieval for open-domain question answering. arXiv preprint arXiv:2004.04906, 2020.
+˘
+
+[31]  Omar Khattab and Matei Zaharia. Colbert: Efﬁcient and effective passage search via contextual-ized late interaction over bert. In Proceedings of the 43rd International ACM SIGIR conference on research and development in Information Retrieval, pages 39–48, 2020.
+
+[32]  Tom Kwiatkowski, Jennimaria Palomaki, Olivia Redﬁeld, Michael Collins, Ankur Parikh, Chris Alberti, Danielle Epstein, Illia Polosukhin, Jacob Devlin, Kenton Lee, et al. Natural questions: a benchmark for question answering research. Transactions of the Association for Computational Linguistics, 7:453–466, 2019.
+
+[33]  John Lafferty and Chengxiang Zhai.  Document language models, query models, and risk minimization for information retrieval. In Proceedings of the 24th annual international ACM SIGIR conference on Research and development in information retrieval, pages 111–119, 2001.
+
+[34]  Canjia Li, Andrew Yates, Sean MacAvaney, Ben He, and Yingfei Sun.   Parade:  Passage representation aggregation for document reranking. arXiv preprint arXiv:2008.09093, 2020.
+
+
+12
+
+[35]  Yinhan Liu, Myle Ott, Naman Goyal, Jingfei Du, Mandar Joshi, Danqi Chen, Omer Levy, Mike Lewis, Luke Zettlemoyer, and Veselin Stoyanov. Roberta: A robustly optimized BERT pretraining approach. CoRR, abs/1907.11692, 2019.
+
+[36]  Wenhao Lu, Jian Jiao, and Ruofei Zhang. Twinbert: Distilling knowledge to twin-structured compressed bert models for large-scale retrieval. In Proceedings of the 29th ACM International Conference on Information & Knowledge Management, pages 2645–2652, 2020.
+
+[37]  Yi Luan, Jacob Eisenstein, Kristina Toutanova, and Michael Collins.   Sparse, dense, and attentional representations for text retrieval. Transactions of the Association for Computational Linguistics, 9:329–345, 2021.
+
+[38]  Yu A Malkov and Dmitry A Yashunin. Efﬁcient and robust approximate nearest neighbor search using hierarchical navigable small world graphs.  IEEE transactions on pattern analysis and machine intelligence, 42(4):824–836, 2018.
+
+[39]  Yuning Mao, Pengcheng He, Xiaodong Liu, Yelong Shen, Jianfeng Gao, Jiawei Han, and Weizhu Chen.  Generation-augmented retrieval for open-domain question answering.  arXiv preprint arXiv:2009.08553, 2020.
+
+[40]  Rodrigo Nogueira, Jimmy Lin, and AI Epistemic. From doc2query to doctttttquery. Online preprint, 2019.
+
+[41]  Rodrigo Nogueira, Wei Yang, Jimmy Lin, and Kyunghyun Cho. Document expansion by query prediction. arXiv preprint arXiv:1904.08375, 2019.
+
+[42]  Fabian Pedregosa, Gaël Varoquaux, Alexandre Gramfort, Vincent Michel, Bertrand Thirion, Olivier Grisel, Mathieu Blondel, Peter Prettenhofer, Ron Weiss, Vincent Dubourg, et al. Scikit-learn: Machine learning in python. the Journal of machine Learning research, 12:2825–2830, 2011.
+
+[43]  Colin Raffel, Noam Shazeer, Adam Roberts, Katherine Lee, Sharan Narang, Michael Matena, Yanqi Zhou, Wei Li, and Peter J Liu. Exploring the limits of transfer learning with a uniﬁed text-to-text transformer. arXiv preprint arXiv:1910.10683, 2019.
+
+[44]  Stephen Robertson and Hugo Zaragoza.  The probabilistic relevance framework: BM25 and beyond. Now Publishers Inc, 2009.
+
+[45]  Stephen E Robertson and Steve Walker. On relevance weights with little relevance informa-tion. In Proceedings of the 20th annual international ACM SIGIR conference on Research and development in information retrieval, pages 16–24, 1997.
+
+[46]  Devendra  Singh  Sachan,  Mostofa  Patwary,  Mohammad  Shoeybi,  Neel  Kant,  Wei  Ping, William L Hamilton, and Bryan Catanzaro. End-to-end training of neural retrievers for open-domain question answering. arXiv preprint arXiv:2101.00408, 2021.
+
+[47]  Noam Shazeer, Azalia Mirhoseini, Krzysztof Maziarz, Andy Davis, Quoc Le, Geoffrey Hinton, and Jeff Dean.  Outrageously large neural networks: The sparsely-gated mixture-of-experts layer. International Conference on Learning Representations (ICLR), 2017.
+
+[48]  Yelong Shen, Xiaodong He, Jianfeng Gao, Li Deng, and Grégoire Mesnil. Learning semantic representations using convolutional neural networks for web search. In Proceedings of the 23rd international conference on world wide web, pages 373–374, 2014.
+
+[49]  Yi Tay, Dara Bahri, Donald Metzler, Da-Cheng Juan, Zhe Zhao, and Che Zheng. Synthesizer: Rethinking self-attention in transformer models. arXiv preprint arXiv:2005.00743, 2020.
+
+[50]  Yi Tay, Vinh Q Tran, Mostafa Dehghani, Jianmo Ni, Dara Bahri, Harsh Mehta, Zhen Qin, Kai Hui, Zhe Zhao, Jai Gupta, et al. Transformer memory as a differentiable search index. arXiv preprint arXiv:2202.06991, 2022.
+
+[51]  Laurens Van der Maaten and Geoffrey Hinton. Visualizing data using t-sne. Journal of machine learning research, 9(11), 2008.
+
+
+13
+
+[52]  Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob Uszkoreit, Llion Jones, Aidan N Gomez, Łukasz Kaiser, and Illia Polosukhin.   Attention is all you need.   In Advances in Neural Information Processing Systems (NeurIPS), pages 5998–6008, 2017.
+
+[53]  Thomas Wolf, Lysandre Debut, Victor Sanh, Julien Chaumond, Clement Delangue, Anthony Moi, Pierric Cistac, Tim Rault, Rémi Louf, Morgan Funtowicz, et al. Huggingface’s transform-ers: State-of-the-art natural language processing. arXiv preprint arXiv:1910.03771, 2019.
+
+[54]  Lee Xiong, Chenyan Xiong, Ye Li, Kwok-Fung Tang, Jialin Liu, Paul N Bennett, Junaid Ahmed, and Arnold Overwijk. Approximate nearest neighbor negative contrastive learning for dense text retrieval. In International Conference on Learning Representations, 2020.
+
+[55]  Sohee Yang and Minjoon Seo. Is retriever merely an approximator of reader? arXiv preprint arXiv:2010.10999, 2020.
+
+[56]  Wei Yang, Haotian Zhang, and Jimmy Lin. Simple applications of bert for ad hoc document retrieval. arXiv preprint arXiv:1903.10972, 2019.
+
+[57]  Hamed Zamani, Mostafa Dehghani, W Bruce Croft, Erik Learned-Miller, and Jaap Kamps. From neural re-ranking to neural ranking: Learning a sparse representation for inverted index-ing. In Proceedings of the 27th ACM international conference on information and knowledge management, pages 497–506, 2018.
+
+[58]  Hang Zhang, Yeyun Gong, Yelong Shen, Jiancheng Lv, Nan Duan, and Weizhu Chen.  Ad-versarial retriever-ranker for dense text retrieval.   In International Conference on Learning Representations, 2021.
+
+[59]  Shengyao Zhuang, Hang Li, and G. Zuccon.  Deep query likelihood model for information retrieval. In ECIR, 2021.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+14
+
+A	Related work
+
+Traditional web search techniques follow a two-stages paradigm including document retrieval and document ranking. The ﬁrst stage aims to select a collection of documents relevant to a given query, which requires an ingenious trade-off between efﬁciency and recall. Then, the document ranking stage takes more advanced features and deeper models to calculate a ﬁne-grained ranking score for each query and document pair. In the following, we ﬁrst discuss related works for document retrieval and ranking respectively. Afterwards, we introduce recent works that incorporate pre-trained language models into these two stages. At last, the attempts on end-to-end retrieval will be discussed.
+
+A.1    Document retrieval
+
+Traditional document retrieval methods are based on Sparse Retrieval, which is built upon inverted index with term matching metrics such as TF-IDF [45], query likelihood [33] or BM25 [44].  In industry-scale web search, BM25 is a difﬁcult-to-beat baseline owing to its outstanding trade-off between accuracy and efﬁciency. In recent years, there are some attempts to incorporate the power of neural networks into inverted index. The Standalone Neural Ranking Model (SNRM) [57] learns high-dimensional sparse representations for queries and documents, which enables the construction of inverted index for efﬁcient document retrieval. Doc2Query [41] predicts relevant queries to augment the content of each document before building the BM25 index, and DocT5Query [40] improves the performance of query generation by the pre-trained language model T5 [5]. Furthermore, DeepCT [9] calculates context-aware term importance through neural networks to improve the term matching metrics of BM25.
+Another line of research lies in Dense Retrieval, which presents query and documents in dense vectors and models their similarities with inner product or cosine similarity. These methods beneﬁt from recent progresses of pre-trained language models, such as BERT [14] and RoBERTa [35] to obtain dense representations for queries and documents. At inference time, efﬁcient Approximate Nearest Neighbor (ANN) search algorithms, such as k-dimensional trees [3], locality-sensitive hashing [10], and graph-based indexes (e.g., HNSW [38], DiskANN [27] and SPANN [7]) can be utilized to retrieve relevant documents within a sublinear time. Besides, Luan et al. [37] analyze the limited capacity of dual encoders, and propose a combination of sparse and dense retrieval methods with multi-vector encoding to achieve better search quality.
+
+A.2    Document ranking
+
+Document ranking has been extensively studied in recent years and experienced a huge improvement with the booming of deep neural networks. Neural network-based document ranking models mainly fall into two categories.   Representation-based models like DSSM (Deep Structured Semantic Model) [25] and CDSSM (a convolution-based variant of DSSM) [48] represent query and document in a shared semantic space and model their semantic similarity through a neural network. In contrast, Interaction-based models ﬁrst build interactions between query and document terms, and then utilizes neural networks to learn hierarchical interaction patterns. For example, DRMM (Deep Relevance Matching Model) [21] extracts interactive features by matching histograms and utilizing a feed forward network with term-gating mechanism to calculate the relevance score of a query-document pair.
+
+A.3    Pre-trained language models
+
+Recently, Pre-trained Language Models (PLMs) like BERT [14] have led to a revolution of web search techniques. The vanilla BERT model utilizes a single-tower architecture that concatenates query and document tokens as a whole input to the relevance model. Despite of its superior performance, the high computational cost hinders its application to industrial-scale web search systems. TwinBERT [36] tackles this problem by exploiting a Siamese architecture, where queries and documents are ﬁrst modeled by two BERT encoders separately, and then an efﬁcient crossing layer is adopted for relevance calculation. The representation vectors for all documents can be calculated and indexed ofﬂine. In the online serving stage, it calculates the representation vector for the input query and applies a crossing layer to calculate the relevance score between each query and document.  The
+
+
+15
+
+crossing layer usually adopts simple similarity functions such as dot product or a single feed-forward layer to achieve a high efﬁciency.
+Moreover, Chang et al. [6] argue that the Masked Language Model (MLM) loss designed for BERT pre-training is not naturally ﬁtted to embedding-based retrieval tasks. Instead, they propose three paragraph-level pre-training tasks, i.e., Inverse Cloze Task (ICT), Body First Selection (BFS), and Wiki Link Prediction (WLP), which demonstrate promising results in text retrieval experiments. Gao et al. [16] ﬁnd that a standard LMs’ internal attention structure is not ready-to-use for dense encoders. Thus, they propose a novel architecture named Condenser to improve the performance of dense retrieval.  ANCE (Approximate nearest neighbor Negative Contrastive Estimation) [54] leverages hard negatives to improve the effectiveness of contrastive learning, which generates better text representations for the retrieval task.
+
+A.4    End-to-end retrieval
+
+The deﬁciency of index-retrieve paradigm lies in that the two stages of document retrieval and re-ranking are optimized separately. Especially, the document retrieval procedure is often sub-optimal and hinders the performance of the entire system. Thus, there are some recent attempts to achieve end-to-end retrieval as a one-stage solution. ColBERT [31] introduces a contextualized late interaction architecture, which independently encodes query and document through BERT, and performs cross-term interaction based on the contextualized representations of query and document terms. ColBERT supports end-to-end retrieval directly from a large document collection by leveraging vector-similarity indexes in the pruned interaction layer. It can be viewed as a compromise between single-tower and twin-tower BERT architectures which maintains an effective trade-off between accuracy and latency. Moreover, the Contextualized Inverted List (COIL) [19] exacts lexical patterns from exact matching pairs through contextualized language representations. At search time, we build representation vectors for query tokens and perform contextualized exact match to retrieve relevant documents based on inverted index.
+Although ColBERT and COIL have shown promising results in end-to-end retrieval tasks without re-ranking, their performance is still not obviously better (if not worse) than a common practice of “BM25 indexer + BERT re-ranker”, and their efﬁciency is also not good enough for an industrial web search engine. Therefore, we resort to a new indexing paradigm to break the bottleneck. We believe the neural corpus indexer proposed in this paper is a crucial break-through, opening up new opportunities to optimize the performance of web-scale document retrieval. Moreover, there are a few attempts that try to build a model-based search index by directly predicting document identiﬁers. Tay et al. [50] proposed the DSI (differentiable search index) model based on an encoder-decoder architecture to generate relevant docids. However, its decoder architecture remains the same as T5, which is unsuitable to generate semantic ids derived by hierarchical k-means. SEAL [4] uses all n-grams in a passage as its possible identiﬁers and build a FM-Index to retrieve documents; but it is hard to enumerate all n-grams for retrieving relevant documents. In addition, our work is related to Deep Retrieval [20] for the recommendation task, which learns a deep retrievable network with user-item clicks without resorting to ANN algorithms constrained by the Euclidean space assumption.
+
+B	Reproducibility
+
+We provide our code for reproduction in the supplementary material. We will release it to public shortly.
+
+B.1    Dataset processing
+
+We conduct experiments on NQ320k and TriviaQA datasets. For NQ320k dataset, the queries are natural language questions and the documents are Wikipedia articles in HTML format. During dataset processing, we ﬁrst ﬁlter out useless HTML tag tokens, and extract title, abstract and content strings of each Wikipedia article using regular expression. The experiments are also conducted on TriviaQA dataset. For TriviaQA dataset, it includes 78k query-document pairs from the Wikipedia domain, which are processed almost the same as NQ320k. Then, we detect duplicated articles based on the title of each article. After that, we concatenate the title, abstract and content strings of each Wikipedia article, and apply a 12 layers pre-trained BERT model on it to generate document embeddings.
+
+
+16
+
+Finally, hierarchical k-means is applied on the article embeddings to produce semantic identiﬁers for each article.
+
+B.2    Hierarchical k-means for semantic identiﬁer
+
+The pseudo code of hierarchical k-means is detailed in in Algorithm 1.
+
+Algorithm 1: Hierarchical k-means.
+Input:
+Document embedding X1:N
+Number of clusters k Recursion terminal condition c
+Output:
+Hierarchical semantic identiﬁer L1:N
+Function: GenerateSemanticIdentiﬁer(X1:N)
+
+C1:k	KMeansCluster(X1:N;k)
+L	?
+for i 2 [0, k     1] do
+Lcurrent	[i]  jCi+1j if jCi+1j > c then
+Lrest	GenerateSemanticIdentiﬁer(Ci+1)
+else
+Lrest	[0;:::;jCi+1j     1]
+end if
+Lcluster	ConcatString(Lcurrent;Lrest) L	L.Append(Lcluster)
+end for
+L	reorderToOriginal(L;X1:N;C1:k)
+return L
+
+
+B.3    Constrained beam search
+
+The pseudo code of constrained beam search is detailed in Algorithm 2.
+
+B.4    Baselines
+
+We describe the baseline methods in this section. For most of them, we use their ofﬁcial open-source implementations.
+•  BM25. BM25 is currently the mainstream algorithm for calculating the similarity score between query and document in information retrieval [44]. We calculate BM25 between an original query Q and a document d which derived from a sum of contributions from each query term qi as,
+t
+
+X
+Score(Q;d) =		wi  R(qi;d) i=1
+
+
+(7)
+
+where wi denotes the weight of qi, and R(qi;d) is the correlation between qi and d. We use the
+open-source implementation from Rank-BM25 2.
+•  BM25 + DocT5Query.   The docT5Query model [40] generates questions that related to a document. These predicted queries are then appended to the original documents, which are then indexed. Note that we use the same predicted queries in our query generation module. Queries
+are issued against the index as “bag of words” queries, using BM25 for evaluation. We use the
+open-source code for DocT5Query3, and the generated queries keep the same with NCI (our model) to have a fair comparison.
+
+2https://github.com/dorianbrown/rank_bm25 3https://github.com/castorini/docTTTTTquery
+
+
+17
+
+
+Algorithm 2: Constrained Beam Search.
+Input:
+Query embedding x Beam search size k Max beam length n
+Preﬁx tree T with root r0, containing all valid identiﬁers Log probability function f(ri) = log(p(rijx;ri   1;:::;r0))
+Output:
+k documents with the highest probabilities Function:
+prex={r0}
+ResultIds	?
+B0	fhprex;EOSig
+for i 2 [1, n] do
+for hprex;sum_log_probi 2 Bi   1 do
+if prex.last().isLeaf() then doc_id = prex.toString()
+ResultIds.add(hdoc_id;sum_log_prob=len(prex)i) else
+for ri 2 prex.last().child() do new_prex = prex.copy().append(ri)
+Bi.add(hnew_prex;sum_log_prob + f(ri)i)
+end for end if
+end for
+Bi	Bi.rank_by_prob().top(k)
+end for
+return ResultIds.rank_by_prob().top(k)
+
+
+•  BERT + ANN (Faiss). We use the Flat Index method with the query and document representa-
+tions obtained by CoCondenser4[16] which is pretrained on Wikipedia and then ﬁnetuned over
+NQ dataset. For the Flat Index method, we use the version implemented by Faiss5.
+•  BERT + BruteForce. In this baseline, we use the CoCondenser [16], pretrained on Wikipedia and then ﬁnetuned over NQ dataset, to encode queries and documents separately.  Then, the Cosine Similarity is computed for each query and document pair. After that, for each query, the documents with the largest Cosine Similarity score are retrieved.
+•  ANCE (MaxP & FirstP). ANCE, a training mechanism, that constructs negatives from an Approximate Nearest Neighbor (ANN) index of the corpus [54]. For BERT FirstP, we concatenate
+the title and content of each document by a [SEP] token.  For BERT MaxP, we only use the
+content of each document. We use the open-source implementation6.
+•  SEAL (BART-Large). We reproduce SEAL based on the open-sourced implementation7.
+•  DSI. The DSI model learns a text-to-text model that maps string queries directly to relevant docids [50]. We report the performance of DSI (T5-Base), DSI (T5-Large) and DSI (T5-XXL) from its original paper as the implementation has not been open-sourced.
+
+C	More Experimental Results
+
+We study the inﬂuence of regularization strength and choose the regularization hyper-parameter  from {0, 0.1, 0.15, 0.2, 0.3}. Table 6 summaries the results with different regularization hyper-parameter  settings.  At convergence, the hyper-parameter  = 0.15 generally achieves better performance. Therefore, we set the default value as  = 0.15 in NCI.
+
+4https://github.com/luyug/Condenser 5https://github.com/facebookresearch/faiss 6https://github.com/microsoft/ANCE 7https://github.com/facebookresearch/SEAL
+
+
+18
+
+Table 6: Different regularization hyper-parameter  in loss function. Left: NQ320k; Right: TriviaQA.
+
+
+Setting	Recall@1  Recall@10  Recall@100  MRR@100  = 0              65.07	82.91	90.65	71.80
+ = 0:1	65.51	85.28	92.52	72.76  = 0:15	65.86	85.20	92.42	73.12  = 0:2	65.55	84.48	92.61	72.63  = 0:3	65.44	85.21	92.45	72.83
+
+Setting	Recall@5 Recall@20 Recall@100 R-Precision  = 0            89.01	93.63	96.16	71.59
+ = 0:1	90.14	94.15	96.96	72.78  = 0:15	90.49	94.45	96.94	73.90  = 0:2	90.44	94.41	96.97	73.22  = 0:3	90.02	94.09	96.79	73.53
+
+
+
+D	Miscellaneous
+
+Social Impacts.    This work aims at introducing a new learning paradigm that can unify the learning and indexing stages with an end-to-end deep neural network. Besides, our work has the potential to inspire more attempts at unifying the retrieval and re-ranking task with an end-to-end framework, which might have positive social impacts.  We do not foresee any form of negative social impact induced by our work.
+
+Privacy Information in Data.    We use the NQ dataset privided by the work [32].  The dataset only includes questions, rendered Wikipedia pages, tokenized representations of each page, and the annotations added by our annotators. No privacy information is included. For the TriviaQA [29], which is a reading comprehension dataset, it includes 78k query-document pairs from the Wikipedia domain. Again, no privacy information is included.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+19

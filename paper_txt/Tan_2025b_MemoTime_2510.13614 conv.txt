@@ -1,0 +1,1182 @@
+﻿
+arXiv:2510.13614v3
+[cs.CL]
+23 Feb 2026
+
+MemoTime: Memory-Augmented Temporal Knowledge Graph Enhanced Large Language Model Reasoning
+
+
+Xingyu Tan UNSW Data61, CSIRO
+Sydney, Australia xingyu.tan@unsw.edu.au
+
+Xiaoyang Wang∗ UNSW
+Sydney, Australia xiaoyang.wang1@unsw.edu.au
+
+
+Qing Liu Data61, CSIRO Hobart, Australia
+q.liu@data61.csiro.au
+
+
+Xiwei Xu Data61, CSIRO Sydney, Australia
+xiwei.xu@data61.csiro.au
+
+
+
+Xin Yuan Data61, CSIRO UNSW
+Sydney, Australia xin.yuan@data61.csiro.au
+
+Liming Zhu Data61, CSIRO Sydney, Australia
+liming.zhu@data61.csiro.au
+
+Wenjie Zhang UNSW
+Sydney, Australia wenjie.zhang@unsw.edu.au
+
+
+
+Abstract
+Large Language Models (LLMs) have achieved impressive reason-ing abilities, but struggle with temporal understanding, especially when questions involve multiple entities, compound operators, and evolving event sequences. Temporal Knowledge Graphs (TKGs), which capture vast amounts of temporal facts in a structured format, offer a reliable source for temporal reasoning. However, existing TKG-based LLM reasoning methods still struggle with four major challenges: maintaining temporal faithfulness in multi-hop rea-soning, achieving multi-entity temporal synchronization, adapting retrieval to diverse temporal operators, and reusing prior reasoning experience for stability and eficiency. To address these issues, we propose MemoTime, a memory-augmented temporal knowledge graph framework that enhances LLM reasoning through structured grounding, recursive reasoning, and continual experience learn-ing. MemoTime decomposes complex temporal questions into a hierarchical Tree of Time, enabling operator-aware reasoning that enforces monotonic timestamps and co-constrains multiple enti-ties under unified temporal bounds. A dynamic evidence retrieval layer adaptively selects operator-specific retrieval strategies, while a self-evolving experience memory stores verified reasoning traces, toolkit decisions, and sub-question embeddings for cross-type reuse. Comprehensive experiments on multiple temporal QA benchmarks show that MemoTime achieves overall state-of-the-art results, out-performing the strong baseline by up to 24.0%. Furthermore, Memo-Time enables smaller models (e.g., Qwen3-4B) to achieve reasoning performance comparable to that of GPT-4-Turbo.
+
+CCS Concepts
+• Information systems → Question answering.
+
+∗Corresponding author.
+
+
+
+This work is licensed under a Creative Commons Attribution 4.0 International License. WWW ’26, Dubai, United Arab Emirates
+© 2026 Copyright held by the owner/author(s). ACM ISBN 979-8-4007-2307-0/2026/04 https://doi.org/10.1145/3774904.3792581
+
+Keywords
+Large Language Models; Retrieval-Augmented Generation; Tem-poral Knowledge Graph; Temporal Knowledge Graph Question Answering; Memory-Augmented Retrieval-Augmented Generation
+
+ACM Reference Format:
+Xingyu Tan, Xiaoyang Wang, Qing Liu, Xiwei Xu, Xin Yuan, Liming Zhu, and Wenjie Zhang. 2026. MemoTime: Memory-Augmented Tempo-ral Knowledge Graph Enhanced Large Language Model Reasoning. In Proceedings of the ACM Web Conference 2026 (WWW ’26), April 13–17, 2026, Dubai, United Arab Emirates. ACM, New York, NY, USA, 21 pages. https://doi.org/10.1145/3774904.3792581
+1	Introduction
+Large Language Models (LLMs) have demonstrated strong perfor-mance across a wide range of tasks by scaling to billions of pa-rameters and pre-training on massive and diverse text corpora [2]. However, due to the prohibitive cost of retraining, these models are inherently static. This limitation results in factual gaps, temporal inconsistencies, and reasoning hallucinations when LLMs are re-quired to process time-sensitive or evolving information [20, 33, 45].
+Retrieval-Augmented Generation (RAG) has emerged as an effec-tive paradigm to mitigate these limitations by allowing LLMs to ac-cessexternal informationsourcesduring inference [14, 15, 69]. Typi-calRAGsystemsembedbothquestionsanddocumentsintoashared vector space and retrieve semantically similar passages [27, 48]. Although effective in many cases, such retrieval often prioritizes semantic similarity while neglecting structural and temporal depen-dencies across entities and events [17]. For instance, two temporally distinct statements such as “Barack Obama is the President of the United States (2009–2017)” and “Joe Biden is the President of the United States (2021–)” may appear semantically related, yet they cannot simultaneously hold true. Plain-text retrieval often fails to distinguish between such temporally exclusive facts, leading to incorrect or contradictory reasoning chains.
+Temporal reasoning further amplifies these challenges. Real-world entities and relationships evolve continuously, i.e., people change roles, organizations merge, and events unfold in sequence over time [4, 24]. Temporal-aware questions therefore often in-volve implicit time constraints, multiple dependent conditions, and mixed temporal granularities such as “Who chaired the committee
+
+
+WWW ’26, April 13–17, 2026, Dubai, United Arab Emirates
+
+
+Question: After the 2018 Singapore summit, which country did North Korea’s foreign minister last visit before attending the 2020 UN assembly?
+
+Text-RAG /	Vietnam
++
+LLM only
+Retrieved text: “North Korea attended the UN Assembly in 2020. The minister visited Vietnam in 2019.”
+Response: "The given text mentions a visit to Vietnam in 2019 in connection with the UN Assembly. Therefore, the last visit before the UN in 2020 was to {Vietnam}."	[Challenge 1]
+(a)
+North korea's
+LLM + TKG	Foreign Minister	China
+UN Assembly
+One-hop around TKG Facts (North Korea's Foreign Minister): "[(FM, visited, China,  2018-12-01), (FM, visited, Vietnam, 2019-03-05), (FM, visited, Russia, 2019-04-24)]. (UN Assembly): [(UN Assembly, heldAt, 2020-09-20)]"
+Response: "Retrieved visits before 2020-09-20 include China, Vietnam, and Russia. Since these are all “before the UN
+2020,” selecting a representative prior visit yields {China} ."	[Challenge 2]
+(b)
+Implicit operator /
+rule-based model	Vietnam
+Implicit rewriting: "Which country did North Korea's foreign minister visit before 2020-09-20?" Retrieves the same three visits: "China 2018-12-01, Vietnam 2019-03-05, Russia 2019-04-24."
+Response: "The  provided  proof  shows  the  visits  before  2020-09-20  include  China,  Vietnam,  and  Russia.  Based  on reported diplomatic activity in 2019, the visit to {Vietnam} appears most relevant."                                       [Challenge 3] (c)
+
+MemoTime	Russia
+
+Inidicator:
+(North korea's foreign minister, attend, SingaporeSummit, ?t₁), (North korea's foreign minister, visit, ?X (answer), ?t3),
+(North korea's foreign minister, attend, UN Assembly, ?t2) [time: After(t3, t1), Before(t3, t2), LastBefore(t3,t2)]
+Q1 When was the 2018 Singapore summit?	Q2 When was the 2020 UN Assembly held?
+Q3 Which countries did North Korea’s FM visit after #1 and before Q2?	Q4 Which was the last visit among Q3?
+
+Temporal Reasoning Chains:
+North korea's    attend        Singapore	visit            China        visit          Vietnam       visit        Russia   attend	UN
+Assembly
+foreign minister 2018-06-12         summit      2018-12-01	2019-03-05	2019-04-24	2020-09-20
+Response: "From the available facts, the Singapore Summit took place on 2018-06-12, and the UN Assembly was held on 2020-09-20. Between these two anchors, the North Korean foreign minister visited China (2018-12-01), Vietnam (2019-03-05), and Russia (2019-04-24). Among these, the latest visit before the 2020 UN Assembly was to {Russia}."
+(d)
+
+Figure 1: Representative workflow of four LLM reasoning paradigms.
+before the 2010 reform?” or “Which country hosted the first sum-mit after 2015?”. These questions require reasoning that integrates both temporal and semantic alignment, which remains dificult for text-based RAG methods that lack structured temporal awareness.
+To address this issue, integrating Temporal Knowledge Graphs (TKGs) with LLM reasoning provides a promising direction [4, 13, 17, 20, 35]. TKGs encode factual knowledge as quadruples (sub-ject, relation, object, timestamp), offering explicit temporal ground-ing and relational structure. By leveraging TKGs, models can rea-son over evolving entities while maintaining factual and tempo-ral consistency. Temporal Knowledge Graph Question Answering (TKGQA) serves as a representative evaluation for this task, requir-ing systems to answer natural language questions by retrieving temporally relevant facts from TKGs.
+Challenges in existing methods. Most existing TKG-based rea-soning frameworks follow a “plan-retrieve-answer” pipeline. In this paradigm, LLMs decompose complex temporal questions into a series of sub-tasks, retrieve related facts from a TKG, and generate an answer based on the retrieved context. While this improves interpretability and modularity, several challenges face.
+Challenge 1: Temporal faithfulness in multi-hop reasoning.  Most temporal QA pipelines[4, 17, 35], as shown in Figure 1(a), prioritize semantic similarity over chronological accuracy. Expanding from one-hop neighbors and ranking by semantics often retrieves paths that appear contextually relevant but violate time constraints. For example, answering “Which country did X last visit before 2020?” may simply return (X, visit, Y, 2019) because of lexical overlap, despite contradicting the before-last relation. In multi-hop queries such as “Who did X hire after Y resigned during Q3 2017?”, locally valid hops can combine into a globally inconsistent reasoning chain.
+
+Xingyu Tan et al.
+
+Challenge 2: Multi-entity temporal synchronization. When a ques-tion contains multiple entities, most systems [3, 35, 43] explore each entity independently and attempt to merge partial evidence later. This disjoint process often produces candidates that never align within a single, time-consistent reasoning path. For instance, as shown in Figure 1(b), independent exploration can yield valid facts for each entity, but fails to synchronize their temporal windows. Challenge 3: Operator diversity and adaptive retrieval.  Temporal questions encompass diverse operators, each requiring a distinct reasoning policy. Previous methods [35, 36] focus on single-round rewriting and can expose explicit timestamps but struggle with com-bined constraints, as shown in Figure 1(c). It prevents the model from adapting to such heterogeneity, resulting in either under-coverage (missing valid evidence) or over-retrieval (noisy results). Challenge 4: Lack of reasoning experience management. Most ex-isting pipelines [13, 27, 35, 47] remain memoryless, discarding suc-cessful reasoning traces after each run. They often rely on manually crafted or static exemplars, which are costly to construct and insuf-ficiently generalizable across diverse temporal question types, lead-ing models repeatedly re-solve similar sub-questions from scratch, failing to transfer prior knowledge across operators or tasks.
+Contribution.  In  this  paper,  we  introduce  MemoTime,  a Memory-Augmented Temporal Knowledge Graph framework de-signed to enhance LLM temporal reasoning, as shown in Figure 1(d). Unlike existing methods that rely on static retrieval or pre-defined templates, MemoTime integrates structured temporal grounding, hierarchical reasoning, dynamic toolkit invocation, and continual memory updating into a unified framework. It enables LLMs to reason faithfully over time-aware facts, adapt retrieval strategies to temporal operators, and progressively improve performance through experience reuse.
+To address multi-hop temporal reasoning problem, MemoTime in-troduces a hierarchical reasoning framework that decomposes complex temporal questions under a unified global plan. All sub-indicators are evolved from the root indicator of the main question, ensuring that each branch inherits consistent temporal constraints and preserves monotonic timestamp progression. Guided by this global supervision, MemoTime performs controlled branch expan-sion, retrieving multi-hop reasoning paths remaining faithful to both semantic relevance and chronological order.
+To handle multi-entity temporal synchronization, MemoTime en-sures that the final reasoning path jointly incorporates all topic entities under a unified temporal framework and synchronized timeline. Instead of exploring entities independently, the system retrieves co-constrained evidence paths that preserve shared tem-poral bounds and consistent granularity, ensuring global coherence and containing the factual basis for the correct answer.
+To adapt to diverse temporal operators, MemoTime introduces a li-brary of temporal reasoning toolkits that support heterogeneous operators. Instead of fixed templates, MemoTime adaptively se-lects the most suitable toolkit through experience-guided prompts. This adaptive retrieval policy ensures that each temporal opera-tor triggers an appropriate reasoning strategy, thereby improving precision and reducing over-retrieval noise.
+MemoTime : Memory-Augmented Temporal Knowledge Graph Enhanced Large Language Model Reasoning	WWW ’26, April 13–17, 2026, Dubai, United Arab Emirates
+
+
+To manage and reuse reasoning experience, MemoTime maintains a continuously evolving experience memory that records success-ful records. Each experience entry is stored alongside embeddings of both the question and its temporal indicator, enabling eficient similarity-based retrieval under operator and type constraints. Dur-ing inference, MemoTime retrieves relevant exemplars to guide new reasoning, while after execution, verified trajectories are written back. The advantage of MemoTime can be abbreviated as follows:
+• Memory-augmented temporal reasoning. MemoTime intro-duces a unified framework that integrates dynamic memory re-trieval and update into temporal-aware question decomposition, allowing the model to recall, reuse, and refine reasoning trajecto-ries for long-term temporal understanding.
+• Hierarchical and interpretable control. A hierarchical con-troller Tree of Time executes, verifies, and refines sub-questions, ensuring faithful and interpretable temporal reasoning.
+• Hybrid retrieval and pruning. An operator-aware retrieval layer  combines  symbolic  graph  expansion  with  embedding search, applying temporal-first pruning and semantic re-ranking for both chronological validity and precise evidence grounding.
+• Self-evolving  experience  memory.  Verified  reasoning  re-sponses are continuously organized in an adaptive experience pool, forming a closed feedback loop for continual improvement.
+• Eficiency and adaptability: a) MemoTime is a plug-and-play framework that can be seamlessly applied to various LLMs and TKGs. b) MemoTime is auto-refresh. New information is incor-porated instantly via TKG retrieval instead of costly LLM fine-tuning. c) MemoTime achieves state-of-the-art results on all the tested datasets, surpasses the strong baseline by up to 24.0%, and enables smaller models (e.g., Qwen3-4B) to achieve reasoning performance comparable to GPT-4-Turbo.
+
+2	Related Work
+LLM-based knowledge graphs reasoning. Graphs are a natu-ral representation for modeling relational structure among enti-ties [22, 23, 46, 51–55, 63, 64]. Knowledge graphs (KGs) provide structured, verifiable knowledge that complements the implicit world knowledge in LLMs [12, 32, 57–59]. Early works embed-ded KG facts into neural networks during pre-training or fine-tuning [26, 39, 40, 65, 68], but such approaches hinder eficient up-dates and reduce interpretability. Recent studies explore LLM–KG integration by prompting LLMs to iteratively traverse graphs, as seen in [19, 43, 49, 62]. These systems guide the LLM to expand rea-soningpathsfromaseedentityandrefineanswersthroughrepeated retrieval–generation cycles. However, starting from a single vertex overlooks multi-entity connections and temporal dependencies, of-ten yielding semantically plausible yet chronologically inconsistent paths. [47] alleviates this by modeling multi-hop reasoning paths, but relies on static KGs and lacks the dynamic temporal alignment.
+Temporal knowledge graphs question answering. Temporal Knowledge graphs extend static graphs with timestamped facts, enabling reasoning over evolving entities and relations[60, 66, 67]. Earlier approaches fall into two main categories: semantic parsing-based and embedding-based methods. Parsing-based methods trans-late natural-language questions into logical forms executable on TKGs [7, 16, 31]. These achieve precise execution but fail on long
+
+or ambiguous queries due to brittle symbolic parsing. Embedding-based methods [28, 28, 36] learn vectorized temporal reasoning by aligning question embeddings with fact embeddings, but they are limited to short reasoning chains and simple time expressions. Recent LLM-based systems [11, 17, 35] improve interpretability by generating reasoning steps in natural language.
+Hierarchical and memory-augmented reasoning. Recent ad-vances in LLM-based QA frameworks have emphasized question decomposition as a way to improve reasoning depth and inter-pretability. Multi-hop reasoning systems such as [61] decompose complex queries into simpler sub-questions that are independently solved and aggregated. This decomposition enables finer-grained retrieval and targeted reasoning across heterogeneous evidence sources [10]. However, these methods decompose linearly, lead-ing to accumulated errors. Moreover, most existing decomposition modules are either manually designed [30] or fine-tuned [56] for specific datasets, limiting their adaptability across temporal and structural question types. In addition to the decomposition, recent studies explore long-term memory systems for LLM agents [29]. Approaches such as [70] enable retrieval of prior interaction histo-ries, while SCM [50] maintains selective access through controller mechanisms. But these frameworks are typically task-agnostic and lack structured representations of reasoning processes.
+3	Preliminaries
+Consider a Temporal Knowledge Graph (TKG) G  =  (E, R, T), where E, R, and T represent the set of entities, relations, and times-tamps, respectively. G = (E, R, T) contains abundant temporal factual knowledge in the form of quadruples, i.e., G = {(𝑒ℎ,𝑟,𝑒𝑡,𝑡) | 𝑒ℎ,𝑒𝑡  ∈ E,𝑟 ∈ R,𝑡 ∈ T}. Temporal constraint defines a condition related to a specific time point or interval that must be satisfied by both the answer and its supporting evidence. Following Allen’s interval algebra [1], this includes the 13 classical temporal relations, as well as extended operators such as temporal set relations, dura-tion comparisons, and sorting mechanisms (e.g., first, last, nth) [44]. Temporal constraints thus enable fine-grained alignment between natural language queries and temporally consistent evidence paths.
+
+Definition 1 (Temporal Path).  Given a TKG  G, a tempo-ral path is a connected sequence of temporal facts, represented as: 𝑝𝑎𝑡ℎG (𝑒1,𝑒𝑙+1)   =  {(𝑒1,𝑟1,𝑒2,𝑡1), (𝑒2,𝑟2,𝑒3,𝑡2), . . ., (𝑒𝑙,𝑟𝑙,𝑒𝑙+1,𝑡𝑙)},
+where 𝑙 denotes the length of the path, i.e., length(pathG (𝑒1,𝑒𝑙+1)) = 𝑙. The path must satisfy two constraints: (1) connectivity: the tail en-
+tity of each fact is identical to the head entity of the next; (2) temporal monotonicity: timestamps are non-decreasing, i.e., 𝑡1  ≤ 𝑡2  ≤ · · · ≤ 𝑡𝑙.
+Example 1 (Temporal Path).  Consider a temporal path be-tween “Merkel” and “EU” with a length of 3 : 𝑝𝑎𝑡ℎG (Merkel,EU) = {(Merkel,   visit,   Paris,   2012),   (Paris,   host,   Conference,   2013), (Conference, attended_by, EU, 2014)}, and can be visualized as:
+
+Merkel −−−→ Paris −−−→ Conference −−−−−−−−→ EU. 2012                  2013                                        2014
+attended_by
+visit	host
+Definition2(TemporalReasoningPath).  GivenaTKG G,and an entity list [𝑒1,𝑒2, . . .,𝑒𝑛], a temporal reasoning path is a sequence of temporal segments 𝑇𝑅𝑃G ([𝑒1, . . .,𝑒𝑛]) = {𝑃1,𝑃2, . . .,𝑃𝑛}, where each 𝑃𝑖  = 𝑝𝑎𝑡ℎG (𝑒𝑖,𝑛𝑖) for some𝑛𝑖  ∈ E, and the global monotonicity condition holds: 𝑡𝑒𝑛𝑑 (𝑃𝑖) ≤ 𝑡𝑠𝑡𝑎𝑟𝑡 (𝑃𝑖+1),	∀ 1 ≤ 𝑖 < 𝑛.
+WWW ’26, April 13–17, 2026, Dubai, United Arab Emirates	Xingyu Tan et al.
+
+
+
+...... Classification Seed Selection Toolkit Selection Question Decomposition
+
+Search Trajectory
+With Type (Q)
+
+
+Memory	Memory Update Type 1                                         ...                     ...
+Type 2	...
+...
+...	...
+Type n
+Experience Update (with Cross-Type Augmentation)
+
+Experience Memory
+
+
+Retrieve
+
+Top-Wexp
+
+Experience Retrieval
+
+
+Incorrect Sample	Reasoning Forward
+Correct Sample	Reasoning Backtrack
+
+Sub-Q3 Indicator:
+(North korea's foreign minister, visit, ?X (answer), ?t3),
+[time: After(t3, t1), Before(t3, t2), BeforeLast(t3,t2)]
+
+Timeline
+t2	 Retrieval Initialization
+
+
+
+Question: After the 2018 Singapore summit, which country did North Korea’s
+foreign minister last visit before attending the 2020 UN assembly?
+
+Topic Entity Recognition
+
+
+Sub-Q1: When was	Sub-Q2: When the 2018 Singapore	was the 2020 UN
+summit?	(1)	Assembly held?  (2)
+
+
+Sub-Q3: Which  countries  did  North Korea’s FM visit after Sub-Q1 and before Sub-Q3?  (3)
+
+
+Memory First	t3 Answering
+
+Experience-Guided Toolkit Selection
+
+
+Hybrid Temporal Retrieval
+
+Temporal-First Pruning
+
+
+
+Subgraph Construction
+
+
+Sub-Q4:  Which   was   the (4,6,8)	last visit among Sub-Q3? (9)
+
+Subquestion and Global Sufficiency
+Check	t1
+
+
+Semantic–Temporal Re-ranking
+
+
+
+Question Analysis, Temporal Type Classification
+
+
+(5)	(7)	(10)
+Question Tree Construction
+
+Tree	Answer Update
+No	Yes!
+
+
+LLM-Aware Selection
+
+Temporal Grounding	Tree of Time — Hierarchical Temporal Reasoning	Temporal Evidence Retrieval and Pruning
+
+Figure 2: Overview of the MemoTime framework. Temporal Grounding: Topic entities and temporal operators are extracted from the input question to construct a question-specific subgraph. Tree of Time (Hierarchical Reasoning): Recursively decomposes the question into sub-questions guided by temporal dependencies, adaptively reusing experience or invoking toolkits for new evidence. Temporal Evidence Retrieval and Pruning: Performs operator-aware retrieval under monotonic time constraints, followed by semantic-temporal re-ranking and LLM-based suficiency verification. Experience Memory: Verified reasoning traces are stored, updated, and retrieved for cross-type reuse, enabling continual self-improvement across reasoning cycles.
+
+
+Example 2 (Temporal Reasoning Path).  Consider a tempo-ral reasoning path 𝑇𝑅𝑃G ([𝑂𝑏𝑎𝑚𝑎,𝐵𝑒𝑖𝑗𝑖𝑛𝑔,𝑃𝑎𝑟𝑖𝑠]), by two tempo-rally aligned segments: 𝑃1= {(Obama, meet, UN, 2009)}, 𝑃2= {(Beijing, linked_via, EU, 2011), (EU, event_in, Paris, 2012)}, visualized as:
+
+Obama −−−→ UN   {   Beijing −−−−−−−→ EU −−−−−−→ Paris. 2009                                                     2011                      2012
+linked_via	event_in
+meet
+Temporal Knowledge Graph Question Answering (TKGQA) is a fun-damental reasoning task based on TKGs. Given a natural language question𝑄 and a TKG G, the objective is to devise a function 𝑓 that identify answer entities or timestamps 𝑎  ∈ 𝐴𝑛𝑠𝑤𝑒𝑟(𝑄) utilizing knowledge in G, i.e.,𝑎 = 𝑓 (𝑞, G). Consistent with previous research [26, 27, 42, 43], we assume topic entities𝑇𝑜𝑝𝑖𝑐𝑠 are mentioned in 𝑄 and answer entities or timestamps 𝐴𝑛𝑠𝑤𝑒𝑟(𝑞) in ground truth are linked to G, i.e.,𝑇𝑜𝑝𝑖𝑐𝑠 ⊆ E and 𝐴𝑛𝑠𝑤𝑒𝑟(𝑄) ⊆ {E ∪ T}.
+
+4	Method
+Overview. MemoTime implements “TKG-grounded LLM reason-ing” by grounding each question in temporal facts, recursively decomposing it into executable sub-queries, retrieving and pruning temporally valid evidence, and continually refining its experience memory. Unlike prior TKGQA or RAG systems that depend on static retrievers or fixed prompts, MemoTime integrates temporal align-ment, hierarchical control, and self-evolving memory into a unified reasoning framework. The overall architecture of MemoTime is detailed in Figure 2, consisting of four key components:
+• Temporal Grounding. The model begins by linking topic enti-ties and constructing a 𝐷max-hop temporal subgraph G𝑄 from the TKG. It then classifies the temporal type of the question using ex-emplars retrieved from memory, producing structured temporal constraints for downstream reasoning (Section 4.1).
+
+• Tree of Time Reasoning. Given the grounded question and its temporal type, MemoTime constructs a hierarchical decomposi-tion tree and executes sub-questions in a top-down manner. For each node, it dynamically decides whether to recall prior experi-ences, invoke temporal toolkits, or refine unresolved branches, ensuring temporal consistency and interpretability (Section 4.2).
+• Temporal Evidence Retrieval and Pruning. Guided by toolkit configurations, MemoTime performs hybrid retrieval, combining time-monotone, graph exploration, and embedding-based search. Retrieved candidates are filtered by temporal constraints, re-ranked by semantic and temporal proximity, and finally verified through an LLM-aware selection step (Section 4.3).
+• Experience Memory. Verified reasoning traces, toolkit selec-tions, and sub-question embeddings are stored in a dynamic memory pool. At inference, similar experiences are retrieved by type and relevance; after reasoning, new traces are written back to continuously refine retrieval and decision-making across future questions (Section 4.4).
+
+4.1	Temporal Grounding
+The temporal grounding stage transforms a natural-language tem-poral question into a structured reasoning representation, establish-ing a factual and temporal foundation for subsequent retrieval and inference. It consists of two core phases: knowledge fact grounding and question analysis. The pseudo-code of the temporal grounding is detailed in Algorithm 1 of Appendix A.
+Knowledge fact grounding. Given an input question 𝑄, Mem-oTime first identifies the relevant temporal subgraph G𝑄  within the underlying TKG. This subgraph captures entities, relations, and time-stamped triples that are semantically or temporally associated
+MemoTime : Memory-Augmented Temporal Knowledge Graph Enhanced Large Language Model Reasoning	WWW ’26, April 13–17, 2026, Dubai, United Arab Emirates
+
+
+with 𝑄 within a bounded 𝐷max-hop neighborhood, serving as the factual evidence base for downstream reasoning.
+Topic entity recognition. To locate question-relevant entities, Mem-oTime employs LLMs to extract potential entity mentions and asso-ciated timestamps from 𝑄. Following extraction, a Dense Retrieval Model(DRM)alignsthesementionswithKGentitiesviaembedding-based similarity matching. Specifically, both question keywords and KG entities are encoded into dense embeddings, and an entity index is constructed using FAISS [9]. Cosine similarity is then computed between the two embedding spaces, and the top-ranked entities are selected to form the topic entity set𝑇𝑜𝑝𝑖𝑐𝑠. These topic entities act as the initial anchors for constructing a localized subgraph. Subgraph construction. Once the topic entities are identified, Mem-
+oTime constructs a 𝐷max-hop subgraph G𝑄   that aggregates all triples connected to each topic entity within the defined temporal window. This subgraph provides a compact yet semantically rich neighborhood for temporal reasoning. To reduce redundancy and computational overhead, we apply graph reduction and relation clustering techniques following [47], ensuring G𝑄  remains concise while preserving the most relevant temporal relations.
+Question analysis. After constructing G𝑄, the next step is to analyze the temporal intent of the question. Unlike conventional TKGQA approaches that treat all questions uniformly, or use the label from the dataset, leveraging the flexibility reduces. Tempo-ral questions exhibit diverse syntactic forms and intricate time constraints. To capture these nuances, MemoTime first performs temporal type classification, identifying the temporal operator that governs the question’s reasoning logic.
+Temporal type classification. Temporal type classification deter-mines the intrinsic temporal relations implied by a question. Fol-lowing Allen’s interval algebra [1], we consider thirteen fundamen-tal temporal relations, as well as extended operators such as set relations, duration comparisons, and ordering mechanisms [44], as introduced in Section 3. Existing methods often rely on static prompts or manually designed exemplars, limiting their adaptabil-ity to complex or unseen temporal structures. In contrast, Mem-
+oTime leverages a continuously updated experience pool E𝑝𝑜𝑜𝑙 that stores successful reasoning trajectories, toolkit configura-tions, and classification results. This memory-based design enables dynamic retrieval of contextually aligned exemplars, improving temporal reasoning consistency across question types. Formally, for a given question 𝑄, type-specific exemplars are retrieved as: Etype  = GetTypeExp(E𝑝𝑜𝑜𝑙,𝑄,𝑊exp), where𝑊exp denotes the exem-plar retrieval limit. These exemplars are then incorporated into the
+LLM classification prompt: Type(𝑄) = PromptTypeSelect(𝑄, Etype),
+allowing the model to identify the most appropriate temporal opera-tor for 𝑄. This exemplar-guided strategy enables the MemoTime to adapt to new question patterns, enhances type prediction accuracy, and lays the foundation for the subsequent decomposition stage.
+
+4.2	Tree of Time — Hierarchical Temporal Reasoning
+After temporal grounding, MemoTime enters the Tree of Time (ToT) stage, which transforms grounded temporal structures into a hierarchical reasoning tree. Serving as the framework’s central
+
+controller, it coordinates decomposition, toolkit execution, sufi-ciency testing, and answer synthesis. Guided by the global plan, the model adaptively alternates between recalling experience, invoking operator-specific toolkits, and refining sub-questions to maintain temporal and semantic consistency. Due to the space limitation, the pseudo-code of the ToT is detailed in Algorithm 2 of Appendix A.
+Question tree construction. Given a temporal question 𝑄 and its classified temporal type Type(𝑄), MemoTime begins by construct-ing a hierarchical decomposition tree T . Each node represents a sub-question with a specific temporal relation or constraint. To enhance robustness, decomposition exemplars are retrieved from the experience pool E𝑝𝑜𝑜𝑙  and integrated into the LLM prompt:
+𝑄
+Edecomp  = GetDecompExp(E𝑝𝑜𝑜𝑙,𝑄,𝑊exp,Type(𝑄)),
+
+T   = PromptDecompose(𝑄, Edecomp,Type(𝑄)).
+𝑄
+This experience-guided process enables the system to build a type-aligned reasoning tree that reflects temporal dependencies among sub-questions. For any parent–child pair (𝑞𝑖,𝑞𝑗), the temporal order satisfies 𝑡(𝑞𝑖) ≤ 𝑡(𝑞𝑗), ensuring temporal monotonicity.
+Indicator extraction. From T , the system extracts a set of sub-question indicators {I𝑖 }, i.e., I𝑖  = ⟨𝑥?,𝑅,𝑦?, C 𝑖𝑚𝑒⟩, each encoding the entities, relations, and temporal constraints required for reason-ing. Based on this, a predicted depth 𝐷pred(𝑞𝑖) is calculated, defined as the maximum distance between the predicted answer and each topic entity. For instance, in Figure 1(d), the predicted depth of the overall indicator is 2.
+𝑄
+𝑡
+Hierarchical execution control. The reasoning tree is traversed in a top-down manner. At each node, MemoTime first checks whether a similar reasoning trace exists in the experience pool for direct reuse. If no match or evidence insuficient, the system proceeds to dynamic toolkit selection to discover new evidence. Experience-guided toolkit selection. When memory lookup fails, MemoTime retrieves prior examples of successful toolkit usage to enhance selection accuracy:
+Etool  = GetToolkitExp(E𝑝𝑜𝑜𝑙,𝑞𝑖,I𝑖,Type(𝑄),𝑊exp),
+and constructs a context-enriched prompt: T = PromptToolkitSelect
+𝑖
+(T , I𝑖, 𝑞𝑖, Etool). The LLM may recommend multiple toolkits si-multaneously, each representing a distinct retrieval or reasoning strategy (e.g., event ordering, interval comparison, or timeline con-struction). All selected tools are executed in parallel, and their candidate results are passed to the suficiency evaluation stage.
+𝜃
+Question answering. After each sub-question 𝑞𝑖  obtains its candi-date temporal results, MemoTime evaluates whether these results suficiently answer the local query and contribute to the overall question. This stage integrates evidence evaluation, global reason-ing synthesis, and hierarchical update for unresolved nodes.
+Sub-question evaluation. For each node in the reasoning tree, the LLM assesses retrieved temporal paths for both semantic relevance and temporal validity. A sub-question is considered suficient when one or more candidate paths provide consistent evidence aligned with its indicator. If multiple valid results exist, a lightweight de-bate–vote strategy aggregates them into a single coherent answer. The solved node and its reasoning trace are recorded in the experi-ence pool E𝑝𝑜𝑜𝑙  for future reuse.
+
+
+WWW ’26, April 13–17, 2026, Dubai, United Arab Emirates
+
+Global suficiency and answer synthesis. After all sub-questions are processed, MemoTime checks the temporal and logical co-herence of the entire reasoning tree. When global suficiency is achieved, verified sub-paths are merged into a unified temporal rea-soning chain that summarizes the full evidence flow. This concise reasoning trace is then used to prompt the final LLM for answer generation, ensuring interpretability and temporal consistency. Tree update and termination. If a sub-question fails suficiency ver-ification, MemoTime adaptively decides whether to retry retrieval, refine the query, or perform further decomposition based on its current reasoning. Newly generated nodes are appended to the tree and processed recursively until all branches are solved or the maxi-
+mum depth 𝐷max is reached. Finally, verified reasoning paths are consolidated into the final evidence chain for answer generation.
+
+
+4.3	Temporal Evidence Retrieval and Pruning
+As discussed in Section 1, identifying reasoning paths that connect all topic entities is crucial for deriving accurate answers. These paths function as interpretable chains of thought. In this section, we operationalize the selected toolkits to perform hybrid retrieval and pruning, balancing eficiency and accuracy while ensuring both high temporal alignment and broad semantic coverage. The pseudo-code of this section is detailed in Algorithm 3 (AppendixA). Retrieval initialization.  Before  path  exploration  begins,  Mem-oTime  performs  seed  selection  to  identify  relevant  entities that serve as starting points for reasoning. If prior successful
+seeds exist in  E𝑝𝑜𝑜𝑙, they are reused directly; otherwise, new seeds are chosen via the experience-augmented prompt: 𝑆𝑖    =
+PromptSeedSelect(𝑇𝑜𝑝𝑖𝑐𝑠,I𝑖,𝑞𝑖, Eseed), where Eseed  denotes the re-trieved relevant examples from memory.
+Toolkit-driven temporal path retrieval. Each toolkit 𝑇𝜃   ∈ T represents a specialized retrieval operator for a temporal reasoning pattern (e.g., one-hop expansion, interval comparison, event order-ing, or range detection). Guided by the indicator I𝑖, each toolkit constrains both the semantic relation and temporal boundary of the retrieval. Multiple toolkits are executed in parallel to form a diverse set of candidate paths P .
+𝑖
+𝑖
+Hybrid temporal retrieval. For graph-based retrieval, the system performs time-monotonic path expansion. Instead of starting from the maximum depth 𝐷max, MemoTime begins exploration at the predicted depth 𝐷pred(I𝑖). Given the subgraph G𝑄, the ordered seed set 𝑆𝑖, the indicator Ii, and the depth 𝐷 = min(𝐷pred(I𝑖),𝐷max), we identify candidate temporal paths that include all seeds in order. To avoid exhaustive search, we apply a tree-structured bidirectional breadth-first search (BiBFS) from each entity to extract all potential paths, defined as: 𝐶  = {𝑝  |  |𝑆𝑖 | · (𝐷−1)  < length(𝑝) ≤ |𝑆𝑖 | · 𝐷}. In parallel, an embedding retriever retrieves semantically relevant facts from document-indexed KG segments, ensuring that implicit or cross-hop relations are also captured. The two result streams are concatenated and unified into a hybrid candidate path pool. Temporal and semantic pruning. Candidate paths are then fil-tered through a multi-stage pruning pipeline by temporal consis-tency, semantics, and LLM selection. Together, these steps drasti-cally reduce noise while retaining only candidates that satisfy both chronological and semantic alignment.
+
+Xingyu Tan et al.
+
+Temporal-first pruning. Traditional relevance-first pruning may re-tain semantically similar but temporally inconsistent paths. To mit-igate this, MemoTime adopts a temporal-first pruning policy. Given
+𝑁
+the candidate pool C = {𝑝𝑖 }𝑖=1  returned by the hybrid retriever, MemoTime first applies a strict temporal filter that removes paths
+violating time constriction C 𝑖𝑚𝑒  or non-monotonic progressions, yielding a valid subset C ⊆ C that satisfies all temporal constraints.
+𝑡
+e
+e
+Semantic–temporal re-ranking. From C, candidates are re-ranked by jointly considering (i) semantic compatibility with the indicator and (ii) proximity of their timestamps to the expected reference
+time. Let DRM(I𝑖,𝑝) denote the semantic similarity between the indicator and path, and 𝑡(·) denote the representative timestamp. Each candidate receives a composite score:
+Score(𝑝) = 𝜆sem · DRM(I𝑖,𝑝) + 𝜆prox · exp −|𝑡(𝑝) − 𝑡(I𝑖) |/𝜎,
+
+where 𝜆sem  and 𝜆prox  balance semantic alignment and temporal proximity. The top-𝑊1 candidates are retained as a compact, high-quality pool for LLM-based selection.
+LLM-aware selection. Following the re-ranking procedure, the can-didate paths are reduced to𝑊1. We then prompt LLM to score and select the top-𝑊max reasoning paths most likely to satisfy question’s temporal and semantic constraints. This final step emphasizes faith-fulness and interpretability, producing a minimal but high-precision evidence set for the suficiency verification in the reasoning loop.
+
+4.4	Experience Memory
+After each reasoning episode, verified temporal paths and toolkit decisions are stored for future reuse, forming the foundation of the experience memory layer. This layer serves as the long-term knowledge base of MemoTime, recording reasoning trajectories, toolkit selection patterns, and verified temporal facts. It bridges different reasoning cycles by allowing the model to retrieve rele-vant exemplars and continually refine its decision-making through accumulated experience. Unlike static prompt libraries, the memory operates as a dynamic, self-evolving component supporting both re-trieval and continual adaptation across diverse question types. The pseudo-code of the section is shown in Algorithm 4 of Appendix A.
+Experience retrieval. During the Tree of Time reasoning pro-cess, each sub-task may query the experience pool E𝑝𝑜𝑜𝑙  to obtain relevant exemplars for decomposition, seed selection, or toolkit usage. All retrieval operations (e.g., GetTypeExp, GetDecompExp, GetToolkitExp) are implemented under a unified interface: E  = RetrieveExperience(E𝑝𝑜𝑜𝑙,𝑞𝑖,I𝑖,𝜏,𝑊exp), where 𝜏  =  Type(𝑄) de-notes the temporal type of the current reasoning context. Each query is restricted to the memory subset that shares the same type label 𝜏, ensuring contextual consistency and preventing cross-type noise. Every experience record stores both textual metadata and its dense embeddings, one for the question text and another for its indicator, allowing semantic–temporal similarity search through a FAISS-based index [9]. The incorrect samples are used as warnings.
+To accelerate lookup, a high-frequency buffer caches recently accessed exemplars. Entries in this buffer are ranked by a hy-brid metric combining embedding similarity and hit frequency: Score(𝐸𝑗) = 𝜆sim cos(𝑒𝑞𝑖 ,𝑒𝐸𝑗 ) + 𝜆hitCount(𝐸𝑗), so that frequently used exemplars gain higher reuse priority. This dual-layer design
+MemoTime : Memory-Augmented Temporal Knowledge Graph Enhanced Large Language Model Reasoning	WWW ’26, April 13–17, 2026, Dubai, United Arab Emirates
+
+
+Table 1: Performance comparison on MultiTQ (Hits@1, %). Best in bold, second-best underlined.
+
+Table   2:   Performance   comparison   on   TimeQuestions (Hits@1, %). Best in bold, second-best underlined.
+
+
+
+Model	LLM	Overall	  Question Type Multiple    Single
+
+
+Answer Type	Model Entity    Time
+
+LLM	Overall	   Question Type	Answer Type Explicit     Implicit     Temporal     Ordinal
+
+
+
+BERT[8] ALBERT[21]
+EmbedKGQA[37] CronKGQA[36] MultiQA[5]
+ChatGPT KG-RAG[4] ReAct KB[4] ARI[4]
+TempAgent[13]
+
+
+–
+
+–
+
+
+
+GPT-3.5-Turbo
+
+
+8.3               6.1 10.8              8.6
+20.6	13.4 27.9	13.4 29.3	15.9
+10.2              7.7 18.5             16.0 21.0             13.6 38.0             68.0 53.9             16.8
+
+
+9.2           10.1          4.0 11.6          13.9          3.2
+23.5          29.0          0.1 33.7          32.8         15.6 34.7          34.9         15.7
+14.7          13.7          2.0 20.0          23.0          7.0 63.5          31.3         30.0 21.0          39.4         34.4 68.4          47.8         66.1
+
+PullNet[42]	10.5	2.2	8.1 Uniqorn[34]                        –	33.1             31.8             31.6 GRAFT-Net[41]	45.2             44.5             42.8
+CronKGQA[28]	46.2	46.6	44.5 TempoQR[28]	41.6	46.5              3.6 EXAQT[18]                         –	57.2	56.8	51.2 TwiRGCN[38]	60.5	60.2	58.6 LGQA[25]	52.9	53.2	50.6
+GenTKGQA[11]	Fine-tune	58.4	59.6	61.1 TimeR4[35]	Fine-tune	64.8	66.0	52.9 ChatGPT                 GPT-3.5-Turbo	45.9	43.3	51.1
+
+23.4	2.9 39.2               20.2 51.5               32.2
+51.1	36.9 40.0	34.9 64.2	42.0 64.1	51.8 60.5	40.2
+56.3	57.8 77.6	45.5 46.5	48.1
+
+
+
+
+MemoTime
+
+
+GPT-4o-mini          64.2 Qwen3-32B           68.2 DeepSeek-V3          73.0 GPT-4-Turbo         77.9
+
+
+40.3	73.0 42.5	77.6 45.9	82.9 53.8	86.8
+
+
+61.5	70.8 62.1	81.7 67.7	84.6 74.5	85.3
+
+
+MemoTime
+
+GPT-4o-mini          60.9             60.0             50.0               69.4               52.8 Qwen3-32B           60.6             58.3             51.1               69.8               53.3 DeepSeek-V3          67.8             63.1             53.3               71.3               54.3 GPT-4-Turbo          71.4            67.0             67.5               74.5               58.7
+
+
+
+
+allows MemoTime to balance long-term generalization with short-term adaptability during ongoing reasoning.
+Experience update. After a reasoning cycle concludes, all verified sub-questions, selected toolkits, and reasoning paths are recorded back into E𝑝𝑜𝑜𝑙. Each record includes textual content, structured indicators, execution parameters, temporal constraints, and corre-sponding embeddings for both the question and the indicator. This dual representation supports precise semantic alignment and fast vector retrieval. New entries are inserted into both the global mem-ory and the buffer; obsolete or low-value traces are periodically pruned to prevent redundancy. Through continuous recording and pruning, the experience pool evolves alongside the system’s reason-ing behaviour, serving as a compact yet expressive representation of accumulated knowledge.
+Cross-type augmentation. While retrieval is type-restricted, the memory layer supports cross-type augmentation during updates. When a sub-question from one temporal type exhibits high struc-tural similarity with exemplars in another, the new record is anno-tated with multiple secondary type labels. This mechanism enables MemoTime to share transferable reasoning patterns across related temporal operators (e.g., BeforeLast and AfterFirst), forming an interconnected experience graph that improves recall and diversity without sacrificing retrieval precision.
+Continual  adaptation.  The  memory  layer  continuously  re-weights  and  reorganizes  stored  exemplars  based  on  retrieval frequency,  temporal  freshness,  and  reasoning  success.  High-confidence exemplars are prioritized in future retrievals, while outdated or inconsistent examples gradually decay in influence. The embedding index is periodically rebalanced to maintain uniform coverage and retrieval eficiency. This self-adaptive mechanism ensures that MemoTime focuses on temporally relevant reasoning strategies and generalizes effectively to unseen question types. Integration with reasoning.  The  experience  memory  interacts closely with the Tree of Time reasoning loop described in Sec-tion 4.2. At runtime, it acts as a shared repository for experience-guided decomposition, toolkit selection, and answer synthesis. Af-ter each reasoning session, verified results, including embeddings, type labels, suficiency status, and hit statistics, are propagated back into memory, updating both the long-term index and the
+
+fast-access buffer. This design closes the reasoning–learning loop, enabling MemoTime to continually refine its temporal reasoning ability through iterative retrieval, execution, and self-improvement.
+
+5	Experiments
+In this section, we evaluate MemoTime on two challenge TKGQA datasets. The detailed experimental settings, including datasets, baselines, and implementations, can be found in Appendix D.
+
+5.1	Main results
+We evaluate MemoTime against a comprehensive set of baselines on MultiTQ and TimeQuestions, as shown in Table 1 and Table 2. On the MultiTQ dataset, traditional pre-trained language models (BERT, ALBERT) and embedding-based methods (EmbedKGQA, CronKGQA, MultiQA) show limited temporal reasoning ability, with overall accuracies below 30%. Their static embeddings fail to capture multi-hop or cross-entity temporal dependencies. LLM-based methods, e.g, KG-RAG, ReAct KB, ARI, TempAgent, leverage prompt reasoning but remain sensitive to implicit time expressions and struggle with multi-constraint temporal alignment. In con-trast, MemoTime consistently outperforms all competitors across both question and answer types. MemoTime with GPT-4-Turbo achieves an overall 77.9% Hit@1, surpassing TempAgent by 24.0% and outperforming all GPT-3.5 baselines by a large margin. Even smallerbackbones(e.g.,Qwen3-32B)reach68.2%,exceedingthebest GPT-3.5-based models. These results confirm that MemoTime effec-tively integrates temporal grounding, hierarchical reasoning, and operator-aware retrieval to ensure temporal faithfulness and rea-soning stability. On the TimeQuestions dataset, which emphasizes explicit versus implicit temporal expressions and temporal versus ordinal answer types, MemoTime again achieves the best overall re-sults. As shown in Table 2, MemoTime with GPT-4-Turbo achieves 71.4% overall accuracy and 74.5% on temporal-type questions, out-performing the fine-tuned GenTKGQA and TimeR4 models, despite being fully training-free. This demonstrates MemoTime’s ability to handle implicit temporal relations and operator combinations through memory-guided decomposition and dynamic temporal re-trieval.Overall,acrossbothdatasets,MemoTimeachievesnewstate-of-the-art results under all backbone LLMs, validating its design as a memory-augmented temporal reasoning framework capable
+WWW ’26, April 13–17, 2026, Dubai, United Arab Emirates	Xingyu Tan et al.
+
+Table 3: Performance comparison between the IO baseline and MemoTime across two temporal QA datasets using six backbone LLMs. The highest improvement is highlighted in bold, and the second-best is underlined for each data.
+
+
+Dataset
+IO
+
+Qwen3-4B
+MemoTime	↑
+
+Qwen3-8B
+IO      MemoTime	↑
+
+Qwen3-32B
+IO      MemoTime	↑
+
+Qwen3-80B
+IO      MemoTime	↑
+
+DeepSeek-V3
+IO      MemoTime	↑
+
+GPT-4-Turbo
+IO     MemoTime	↑
+
+
+
+MultiTQ                 3.5 TimeQuestion    18.0
+
+55.3            14.8 ×      2.5 45.3            1.5 ×      28.5
+
+57.0            21.8 ×       1.3              61.4 49.4              0.7 ×       30.0             60.6
+
+46.2 ×       9.5             67.5 1.0 ×        41.0            62.7
+
+6.1 ×     7.5 0.5 ×    43.5
+
+70.9            8.5 ×    12.0            76.3             5.4 × 64.6            0.5 ×    44.0            68.1            0.5 ×
+
+
+
+Table 4: Ablation study on MultiTQ (Hits@1, %).
+
+Model Variant                                          Overall       Question Type        Answer Type Multiple    Single    Entity    Time
+MemoTime (Full w/GPT-4o-mini)	64.2	40.3	73.0	61.5	70.8 w/o Graph-based Retrieval	52.9	23.5	65.0	48.2	64.2 w/o Embedding Retrieval	60.1	38.6	68.0	57.4	66.8 w/o Temporal Evidence Retrieval	11.2              8.0	12.4	11.5	12.0 w/o Question Tree	58.3	19.3	72.6	54.6	70.1 w/o Experience Memory	59.8	26.1	72.2	55.8	69.6
+
+of learning from experience, synchronizing multiple entities, and maintaining temporal consistency across diverse question types.
+5.2	Ablation Study
+How does the performance of MemoTime vary across dif-ferent LLM backbones? To evaluate the generality of our ap-proach, we tested MemoTime on six LLM backbones, including Qwen3-4B, Qwen3-8B, Qwen3-32B, Qwen3-80B, DeepSeek-V3, and GPT-4-Turbo, across two temporal QA benchmarks (MultiTQ and TimeQuestions). As shown in Table 3, MemoTime consistently im-proves performance over the IO baseline across all settings. On the more complex MultiTQ, which requires multi-hop and cross-entity temporal reasoning, MemoTime boosts accuracy from as low as 1.3% to 61.4% on Qwen3-32B, achieving a 46.2 times rela-tive gain. Even the smallest backbones (e.g., Qwen3-4B) experi-ence a 14.8 times improvement, demonstrating that our recursive, memory-augmented reasoning compensates for weaker tempo-ral understanding in smaller models. For TimeQuestions, which involves simpler, single-hop temporal relations, MemoTime still im-proves performance modestly by up to 1.5 times, indicating consis-tent stability across reasoning dificulty levels. Overall, MemoTime enables smaller models to perform competitively with large-scale LLMs such as GPT-4-Turbo, while stronger models continue to ben-efit from enhanced temporal faithfulness and reduced reasoning variance. These results confirm that MemoTime generalizes well across architectures and scales, serving as a plug-in temporal rea-soning module rather than relying on model-specific fine-tuning.
+How does temporal evidence retrieval affect performance? To assess the contribution of the temporal evidence retrieval module, we disable different retrieval components. As shown in Table 4, removing graph-based retrieval reduces the overall accuracy from 64.2% to 52.9%, with a substantial drop on multiple-entity questions (from 40.3% to 23.5%), indicating that explicit structural traversal is essential for maintaining temporally aligned entity paths. When embedding-based retrieval is removed, the performance decreases moderately from 64.2% to 60.1%, suggesting that semantic retrieval complements the graph search by capturing lexically diverse or contextually implicit temporal cues. In contrast, when all external retrieval modules are disabled and the model relies solely on its internalknowledge,theaccuracyfallsdrasticallyto11.2%,reflecting
+
+
+a near-complete loss of temporal grounding. These findings confirm that temporal evidence retrieval is not only indispensable but also synergistic: graph-based retrieval ensures factual precision through topological consistency, while embedding-based retrieval enhances coverage through semantic generalization.
+How does hierarchical decomposition affect performance? To examine the role of hierarchical decomposition, we disable the Tree-of-Time module, forcing the model to reason over the full question without recursive planning. As shown in Table 4, the over-all accuracy increases from 64.2% to 58.3%, while performance on multiple-entity questions drops sharply from 40.3% to 19.3%. This substantial decline demonstrates that recursive decomposition is critical for handling complex temporal dependencies and multi-hop constraints. Even with retrieval retained, the absence of decompo-sition limits the model’s ability to enforce monotonic timestamp ordering and to synchronize temporal operators across entities, leading to degraded reasoning coherence.
+How does experience memory affect performance? To analyse the role of continual learning, we remove the experience memory module, preventing MemoTime from accessing previously verified reasoning traces. The result in Table 4 shows it causes a moderate performance drop from 64.2% to 59.8%, with larger reductions ob-served on multi-hop questions, from 40.3% to 26.1%. The results indicate that experience memory enhances reasoning stability and eficiency. Although the model remains competitive without it, the memory mechanism contributes to more consistent reasoning tra-jectories and progressive self-improvement across inference cycles.
+To further evaluate the effectiveness and eficiency of Memo-Time, we conduct additional experiments, including multi-granular temporal QA analysis, eficiency analysis, and case studies of tem-poral interpretability and faithful reasoning in Appendix B.
+6	Conclusion
+In this paper, we present MemoTime, a memory-augmented tem-poralknowledgegraphframeworkthatenhancesLLMtemporalrea-soning through structured grounding, hierarchical decomposition, and continual experience learning. MemoTime enables temporally faithful, multi-entity reasoning by constructing operator-aware temporal paths and dynamically reusing verified reasoning traces. Itsadaptiveretrievalandmemoryintegrationallowittobalanceefi-ciency, accuracy, and temporal consistency across diverse reasoning scenarios. Extensive experiments on multiple temporal QA datasets demonstrate that MemoTime outperforms existing baselines, show-casing its superior reasoning capabilities and interoperability.
+
+Acknowledgments
+Xiaoyang Wang is supported by the Australian Research Council DP230101445 and DP240101322. Wenjie Zhang is supported by the Australian Research Council DP230101445 and FT210100303.
+MemoTime : Memory-Augmented Temporal Knowledge Graph Enhanced Large Language Model Reasoning	WWW ’26, April 13–17, 2026, Dubai, United Arab Emirates
+
+
+References
+[1]  James F Allen. 1984.  Towards a general theory of action and time.  Artificial intelligence 23, 2 (1984), 123–154.
+[2]  Tom B Brown. 2020.  Language models are few-shot learners.  arXiv preprint arXiv:2005.14165 (2020).
+[3]  Liyi Chen, Panrong Tong, et al. 2024. Plan-on-Graph: Self-Correcting Adaptive Planning of Large Language Model on Knowledge Graphs. In NeurIPS.
+[4]  Ziyang Chen, Dongfang Li, Xiang Zhao, et al. 2024. Temporal knowledge question answering via abstract reasoning induction. In ACL.
+[5]  Ziyang Chen, Jinzhi Liao, and Xiang Zhao. 2023.  Multi-granularity temporal question answering over knowledge graphs. In ACL. 11378–11392.
+[6]  Ziyang Chen, Jinzhi Liao, and Xiang Zhao. 2023. Multi-granularity Temporal Question Answering over Knowledge Graphs. In ACL. 11378–11392.
+[7]  ZhuoChen,ZhaoZhang,etal.2024. Self-improvementprogrammingfortemporal knowledge graph question answering. arXiv preprint arXiv:2404.01720 (2024).
+[8]  Jacob Devlin, Ming-Wei Chang, et al. 2019. Bert: Pre-training of deep bidirectional transformers for language understanding. In NAACL.
+[9]  Matthijs Douze, Alexandr Guzhva, Chengqi Deng, et al. 2024. The faiss library. arXiv preprint arXiv:2401.08281 (2024).
+[10]  Yair Feldman and Ran El-Yaniv. 2019. Multi-hop paragraph retrieval for open-domain question answering. arXiv preprint arXiv:1906.06606 (2019).
+[11]  Yifu Gao, Linbo Qiao, et al. 2024. Two-stage generative question answering on temporal knowledge graph using large language models. In ACL.
+[12]  Xinyan Guan, Yanjiang Liu, et al. 2024. Mitigating large language model halluci-nations via autonomous knowledge graph-based retrofitting. In AAAI.
+[13]  Qianyi Hu, Xinhui Tu, et al. 2025. Time-aware ReAct Agent for Temporal Knowl-edge Graph Question Answering. In Findings of NAACL.
+[14]  Chengkai Huang, Hongtao Huang, Tong Yu, et al. 2025.  A Survey of Founda-tion Model-Powered Recommender Systems: From Feature-Based, Generative to Agentic Paradigms. arXiv preprint arXiv:2504.16420 (2025).
+[15]  Chengkai Huang, Yu Xia, Rui Wang, et al. 2025. Embedding-informed adaptive retrieval-augmented generation of large language models. In COLING.
+[16]  Zhen Jia, Abdalghani Abujabal, et al. 2018. TEQUILA: Temporal Question An-swering over Knowledge Bases. In CIKM.
+[17]  Zhen Jia, Philipp Christmann, and Gerhard Weikum. 2024.  Faithful temporal question answering over heterogeneous sources. In WWW. 2052–2063.
+[18]  Zhen Jia, Soumajit Pramanik, Rishiraj Saha Roy, and Gerhard Weikum. 2021. Complex temporal question answering on knowledge graphs. In CIKM.
+[19]  Jinhao Jiang et al. 2023. Structgpt: A general framework for large language model to reason over structured data. arXiv preprint arXiv:2305.09645 (2023).
+[20]  Tushar Khot et al. 2022. Decomposed prompting: A modular approach for solving complex tasks. arXiv preprint arXiv:2210.02406 (2022).
+[21]  Zhenzhong Lan, Mingda Chen, et al. 2019. Albert: A lite bert for self-supervised learning of language representations. arXiv preprint arXiv:1909.11942 (2019).
+[22]  Fan Li, Xiaoyang Wang, Dawei Cheng, et al. 2025. Eficient dynamic attributed graph generation. In ICDE.
+[23]  Fan Li, Zhiyu Xu, et al. 2024. AdaRisk: risk-adaptive deep reinforcement learning for vulnerable nodes detection. IEEE TKDE (2024).
+[24]  Ke Liang, Lingyuan Meng, et al. 2023.  Learn from relational correlations and periodic events for temporal knowledge graph reasoning. In SIGIR.
+[25]  Yonghao Liu, Di Liang, Mengyu Li, et al. 2023.   Local and Global: Temporal Question Answering via Information Fusion.. In IJCAI. 5141–5149.
+[26]  Linhao Luo et al. 2023.  Reasoning on graphs: Faithful and interpretable large language model reasoning. arXiv preprint arXiv:2310.01061 (2023).
+[27]  Shengjie Ma, Chengjin Xu, et al. 2024.  Think-on-Graph 2.0: Deep and Inter-pretable Large Language Model Reasoning with Knowledge Graph-guided Re-trieval. arXiv preprint arXiv:2407.10805 (2024).
+[28]  Costas Mavromatis, Prasanna Lakkur Subramanyam, et al. 2022. Tempoqr: tem-poral question reasoning over knowledge graphs. In AAAI.
+[29]  Kai Mei, Zelong Li, Shuyuan Xu, Ruosong Ye, Yingqiang Ge, and Yongfeng Zhang. 2024. AIOS: LLM agent operating system. arXiv e-prints, pp. arXiv–2403 (2024).
+[30]  Sewon Min, Victor Zhong, et al. 2019. Multi-hop reading comprehension through question decomposition and rescoring. arXiv preprint arXiv:1906.02916 (2019).
+[31]  Sumit Neelam and Udit others Sharma. 2022. SYGMA: A System for Generalizable and Modular Question Answering Over Knowledge Bases. In Findings of EMNLP.
+[32]  Shirui Pan, Linhao Luo, et al. 2024. Unifying large language models and knowl-edge graphs: A roadmap. IEEE TKDE (2024).
+[33]  Fabio Petroni et al. 2020. KILT: a benchmark for knowledge intensive language tasks. arXiv preprint arXiv:2009.02252 (2020).
+[34]  Soumajit Pramanik et al. 2024.  Uniqorn: unified question answering over rdf knowledge graphs and natural language text. Journal of Web Semantics (2024).
+[35]  Xinying Qian et al. 2024. TimeR4 : Time-aware Retrieval-Augmented Large Lan-guage Models for Temporal Knowledge Graph Question Answering. In EMNLP.
+[36]  Apoorv Saxena et al. 2021. Question answering over temporal knowledge graphs. In ACL.
+[37]  Apoorv Saxena, Aditay Tripathi, et al. 2020.   Improving multi-hop question answering over knowledge graphs using knowledge base embeddings. In ACL.
+
+
+[38]  Aditya Sharma et al. 2022.    Twirgcn: Temporally weighted graph convolu-tion for question answering over temporal knowledge graphs.  arXiv preprint arXiv:2210.06281 (2022).
+[39]  Qing Sima, Xiaoyang Wang, et al. 2026. Beyond Homophily: Community Search on Heterophilic Graphs. arXiv preprint arXiv:2601.01703 (2026).
+[40]  Qing Sima, Jianke Yu, et al. 2025.   Deep overlapping community search via subspace embedding. SIGMOD (2025).
+[41]  Haitian Sun et al. 2018. Open domain question answering using early fusion of knowledge bases and text. arXiv preprint arXiv:1809.00782 (2018).
+[42]  Haitian Sun et al. 2019. Pullnet: Open domain question answering with iterative retrieval on knowledge bases and text. arXiv preprint arXiv:1904.09537 (2019).
+[43]  Jiashuo Sun, Chengjin Xu, et al. 2024. Think-on-Graph: Deep and Responsible Reasoning of Large Language Model on Knowledge Graph. In ICLR.
+[44]  Qiang Sun, Sirui Li, et al. 2025.  TimelineKGQA: A Comprehensive Question-Answer Pair Generator for Temporal Knowledge Graphs. In WWW.
+[45]  Alon Talmor et al. 2018.   Commonsenseqa: A question answering challenge targeting commonsense knowledge. arXiv preprint arXiv:1811.00937 (2018).
+[46]  Xingyu Tan, Jingya Qian, Chen Chen, Sima Qing, Yanping Wu, Xiaoyang Wang, and Wenjie Zhang. 2023. Higher-order peak decomposition. In Proceedings of the 32nd ACM International Conference on Information and Knowledge Management.
+[47]  Xingyu Tan, Xiaoyang Wang, Qing Liu, Xiwei Xu, Xin Yuan, and Wenjie Zhang. 2025.  Paths-over-graph: Knowledge graph empowered large language model reasoning. In Proceedings of the ACM on Web Conference 2025. 3505–3522.
+[48]  Xingyu Tan, Xiaoyang Wang, Qing Liu, Xiwei Xu, Xin Yuan, Liming Zhu, and Wenjie Zhang. 2025. Hydrarag: Structured cross-source enhanced large language model reasoning. In EMNLP. 14442–14470.
+[49]  Xingyu Tan, Xiaoyang Wang, Qing Liu, Xiwei Xu, Xin Yuan, Liming Zhu, and Wenjie Zhang. 2026. PrivGemo: Privacy-Preserving Dual-Tower Graph Retrieval for Empowering LLM Reasoning with Memory Augmentation. arXiv preprint arXiv:2601.08739 (2026).
+[50]  Bing Wang et al. 2023.  Enhancing large language model with self-controlled memory framework. arXiv preprint arXiv:2304.13343 (2023).
+[51]  Jinghao Wang, Yanping Wu, Xiaoyang Wang, et al. 2025.  Effective Influence Maximization with Priority. In WWW.
+[52]  Jinghao Wang, Yanping Wu, Xiaoyang Wang, et al. 2025. Time-Critical Influence Minimization via Node Blocking. SIGMOD (2025).
+[53]  Jinghao Wang, Yanping Wu, Xiaoyang Wang, Ying Zhang, et al. 2024. Eficient influence minimization via node blocking. arXiv preprint arXiv:2405.12871 (2024).
+[54]  Yiqi Wang, Long Yuan, et al. 2023. Towards eficient shortest path counting on billion-scale graphs. In ICDE.
+[55]  Yiqi Wang, Long Yuan, et al. 2024.   Simpler is more: Eficient top-k nearest neighbors search on large road networks. arXiv preprint arXiv:2408.05432 (2024).
+[56]  Jian Wu et al. 2024. Gendec: A robust generative question-decomposition method for multi-hop reasoning. arXiv preprint arXiv:2402.11166 (2024).
+[57]  Yanping Wu, Renjie Sun, Xiaoyang Wang, et al. 2024. Eficient Maximal Frequent Group Enumeration in Temporal Bipartite Graphs. Proc. VLDB Endow. (2024).
+[58]  Yuhan Wu, Yuanyuan Xu, Xuemin Lin, and Wenjie Zhang. 2023.   A holistic approach for answering logical queries on knowledge graphs. In ICDE.
+[59]  Peiting Xie, Xiangjun Zai, Yanping Wu, et al. 2025. HL-index: Fast Reachability Query in Hypergraphs. arXiv preprint arXiv:2512.23345 (2025).
+[60]  Zhengyi Yang, Wenjie Zhang, Xuemin Lin, et al. 2023. Hgmatch: A match-by-hyperedge approach for subgraph matching on hypergraphs. In ICDE.
+[61]  Shunyu Yao et al. 2022.  React: Synergizing reasoning and acting in language models. arXiv preprint arXiv:2210.03629 (2022).
+[62]  Xiangjun Zai, Xingyu Tan, Xiaoyang Wang, Qing Liu, et al. 2025. PRoH: Dynamic Planning and Reasoning over Knowledge Hypergraphs for Retrieval-Augmented Generation. arXiv preprint arXiv:2510.12434 (2025).
+[63]  Zian Zhai, Fan Li, Xingyu Tan, Xiaoyang Wang, and Wenjie Zhang. 2025. Graph is a natural regularization: Revisiting vector quantization for graph representation learning. arXiv preprint arXiv:2508.06588 (2025).
+[64]  Zian Zhai, Qing Sima, Xiaoyang Wang, and Wenjie Zhang. 2025. SGPT: Few-Shot Prompt Tuning for Signed Graphs. In CIKM.
+[65]  Hang Zhang et al. 2021. Poolingformer: Long document modeling with pooling attention. In ICML. PMLR.
+[66]  Tianming Zhang, Xinwei Cai, et al. 2024.  Towards eficient simulation-based constrained temporal graph pattern matching. World Wide Web (2024).
+[67]  Tianming Zhang, Junkai Fang, et al. 2024.   Tatkc: A temporal graph neural network for fast approximate temporal Katz centrality ranking. In WWW.
+[68]  Liangwei Nathan Zheng, Chang George Dong, et al. 2024. Understanding Why Large Language Models Can Be Ineffective in Time Series Analysis: The Impact of Modality Alignment. arXiv preprint arXiv:2410.12326 (2024).
+[69]  Liangwei Nathan Zheng, Wenhao Liang, Wei Emma Zhang, et al. 2025.  Lift-ing  Manifolds  to  Mitigate  Pseudo-Alignment  in  LLM4TS.     arXiv  preprint arXiv:2510.12847 (2025).
+[70]  Wanjun Zhong, Lianghong Guo, Qiqi Gao, He Ye, and Yanlin Wang. 2024. Mem-orybank: Enhancing large language models with long-term memory. In AAAI.
+WWW ’26, April 13–17, 2026, Dubai, United Arab Emirates	Xingyu Tan et al.
+𝑄
+
+A	Algorithm	Algorithm 3: TemporalRetrieveAndPrune
+
+A.1	Temporal Grounding
+We present the comprehensive algorithmic procedure for temporal grounding (Section 4.1) in Algorithm 1.
+
+A.2	Tree of Time Reasoning
+We present the comprehensive algorithmic procedure for Tree of Time hierarchical reasoning (Section 4.2) in Algorithm 2.
+
+A.3	Temporal Evidence Retrieval and Pruning
+We present the comprehensive algorithmic procedure for temporal evidence retrieval and pruning (Section 4.3) in Algorithm 3.
+
+A.4	Experience Memory
+We present the comprehensive algorithmic procedure for experi-ence memory (Section 4.4) in Algorithm 4.
+Algorithm 1: TemporalGrounding
+Input     : Question 𝑄, TKG G, experience pool E𝑝𝑜𝑜𝑙 , limits 𝐷max,𝑊exp
+Output  : Subquestion tree T  , indicators {I𝑖 }, topic entities𝑇𝑜𝑝𝑖𝑐𝑠, type Type(𝑄), subgraph G𝑄
+𝑄
+/*  LLM  extraction  +  DRM  alignment  */
+1   𝐾𝑒𝑦𝑤𝑜𝑟𝑑𝑠 ← NER(𝑄); 𝐶𝑎𝑛𝑑 ← LinkToKG(𝐾𝑒𝑦𝑤𝑜𝑟𝑑𝑠, G);
+
+
+Input     : Subquestion (𝑞𝑖,I𝑖 ), topics𝑇𝑜𝑝𝑖𝑐𝑠, selected toolkits T, experience pool E𝑝𝑜𝑜𝑙 , subgraph G𝑄, limits 𝑊max,𝑊exp,𝐷max
+𝑖
+Output  : Pruned candidates 𝐶𝑖, selected seeds 𝑆𝑖 1   E𝑠𝑒𝑒𝑑  ← GetSeedExp(E𝑝𝑜𝑜𝑙,𝑞𝑖,I𝑖,𝑊exp);
+2   𝑆𝑖  ← PromptSeedSelect (𝑇𝑜𝑝𝑖𝑐𝑠,I𝑖,𝑞𝑖, E𝑠𝑒𝑒𝑑 ); 𝐶 ← ∅; 3   for each𝑇𝜃  ∈ T in parallel do
+𝑖
+4	𝐶 ← 𝐶 ∪ TreeBasedTemporalPathRetrieval(G𝑄,𝑇𝜃,I𝑖,𝑆𝑖,𝐷max); 5	𝐶 ← 𝐶 ∪ DenseEmbedRetrieve(I𝑖,𝑇𝜃,Docu(G𝑄 ));
+6  𝐶 ← { 𝑝 ∈ 𝐶 | 𝑝 ⊨ C 𝑖𝑚𝑒 (I𝑖 ) ∧ Monotone(𝑝) }; 7   for each 𝑝 ∈ 𝐶 do
+e
+𝑡
+e
+8	𝑠sem (𝑝) ← SemanticDRM(I𝑖,𝑝);
+9	𝑠prox (𝑝) ← exp(−|𝑡 (𝑝) − 𝑡 (I𝑖 )|/𝜎);
+10	𝑆𝑐𝑜𝑟𝑒(𝑝) ← 𝜆sem𝑠sem (𝑝) + 𝜆prox𝑠prox (𝑝);
+11  𝐶 ← SelectTopPathandSort(𝐶,𝑊1); 12  𝐶𝑖  ← PromptSelectPath (𝐶,𝑞𝑖,I𝑖,𝑊max); 13   Return 𝐶𝑖,𝑆𝑖;
+e	e
+e
+14   Procedure TreeBasedTemporalPathRetrieval(G𝑄,𝑇𝜃,I𝑖,𝑆𝑖,𝐷max) 15   StartList, C 𝑖𝑚𝑒,𝐷pred  ← ExtractInfo(𝑇𝜃,I𝑖,𝑆𝑖 );
+𝑡
+16   𝐷 ← 1; Paths ← ∅;
+Frontier ← {(𝑠,𝑡0, []) | 𝑠 ∈ StartList, 𝑡0 = InitTime(C 𝑖𝑚𝑒 )}; 17   while 𝐷 ≤ 𝐷max do
+𝑡
+18	NewFrontier ← ∅;
+
+
+
+2  𝑇𝑜𝑝𝑖𝑐𝑠 ← Disambiguate(𝑄,𝐶𝑎𝑛𝑑);
+/*  bounded  𝐷max-hop  temporal  neighborhood  */ 3   G𝑄  ← BuildTemporalSubgraph(𝑇𝑜𝑝𝑖𝑐𝑠, G,𝐷max);
+/*  Temporal  type  classification  */
+
+19	for each (𝑣,𝑡last,𝑃) ∈ Frontier do
+20	for each (𝑣 −−→ 𝑢) ∈ ExpandOneHop(G𝑄, 𝑣,𝑇𝜃 ) do 21                                 if ¬Monotone(𝑡last,𝑡𝑒 ) then
+𝑟,𝑡
+𝑒
+22	continue
+
+
+
+4   E𝑡𝑦𝑝𝑒  ← GetTypeExp(E𝑝𝑜𝑜𝑙,𝑄,𝑊exp); 5   Type(𝑄) ← PromptTypeSelect (𝑄, E𝑡𝑦𝑝𝑒 ); 6   Return T  , {I𝑖 },𝑇𝑜𝑝𝑖𝑐𝑠,Type(𝑄), G𝑄;
+
+Algorithm 2: TreeofTimeReasoning
+Input     : indicators {I𝑖 }, subgraph G𝑄, topics𝑇𝑜𝑝𝑖𝑐𝑠, experience pool E𝑝𝑜𝑜𝑙 , limits 𝐷max,𝐵max,𝑊max,𝑊exp
+Output  : Local answers/paths per node; updated tree
+1   E𝑑𝑒𝑐𝑜𝑚𝑝  ← GetDecompExp(E𝑝𝑜𝑜𝑙,𝑄,𝑊exp,Type(𝑄)); 2   if ∃ compatible plan in E𝑑𝑒𝑐𝑜𝑚𝑝  then
+3	T   ← ReusePlan(E𝑑𝑒𝑐𝑜𝑚𝑝,𝑄,𝑇𝑜𝑝𝑖𝑐𝑠);
+𝑄
+4   else T   ← PromptDecompose (𝑄, E𝑑𝑒𝑐𝑜𝑚𝑝,Type(𝑄)); 5   {I𝑖 } ← ExtractIndicators(T  );
+𝑄
+𝑄
+6   for each (𝑞𝑖,I𝑖 ) ∈ TraverseRootToLeaf(T  ) do
+𝑄
+ˆ
+ˆ
+7	(𝑎,𝑃,sufficient) ← MemoryLookupAndTest(𝑞𝑖,I𝑖, E𝑝𝑜𝑜𝑙 ); 8	if sufficient then continue;
+9	E𝑡𝑜𝑜𝑙  ← GetToolkitExp(E𝑝𝑜𝑜𝑙,𝑞𝑖,I𝑖,Type(𝑄),𝑊exp);
+10	T ← PromptToolkitSelect (T ,I𝑖,𝑞𝑖, E𝑡𝑜𝑜𝑙 ); 11	(𝐶𝑖,𝑆𝑖 ) ←
+𝑖
+𝜃
+TemporalRetrieveAndPrune(G𝑄,𝑞𝑖,I𝑖,𝑇𝑜𝑝𝑖𝑐𝑠, T, E𝑝𝑜𝑜𝑙,𝑊max); 12	(𝑎𝑖,𝑃𝑖,sufficient) ← DebateVoteAndTest(𝑞𝑖,I𝑖,𝐶𝑖 );
+𝑖
+13	if ¬sufficient then
+14	if DepthOK  ∧  BranchOK then
+15	{𝑞𝑛𝑒𝑤 }, {I𝑛𝑒𝑤 } ← RefineOrDecompose(𝑞𝑖,I𝑖,𝐶𝑖 ); 16	UpdateTree(T  , {𝑞𝑛𝑒𝑤 }, {I𝑛𝑒𝑤 });
+𝑄
+
+17	else WriteBackIfSuccess(E𝑝𝑜𝑜𝑙,𝑞𝑖,I𝑖,𝑎𝑖,𝑃𝑖, T  );
+𝑄
+18   Return {𝑎𝑖}, {𝑝𝑖}, T  ;
+𝑄
+
+
+23                                 𝑃′  ← 𝑃 ∥ (𝑣 −−→ 𝑢); Paths ← Paths ∪ {𝑃′}; 24                                 NewFrontier ← NewFrontier ∪ {(𝑢,𝑡𝑒,𝑃′)};
+𝑟,𝑡
+𝑒
+
+25	if |NewFrontier| > 𝑊max then
+26	NewFrontier ← RelevantPruning(NewFrontier,I𝑖,𝑊max);
+27	Frontier ← NewFrontier; 𝐷 ← 𝐷+1; 28   Return Paths;
+
+Algorithm 4: Experience Memory
+Input     : Experience pool E𝑝𝑜𝑜𝑙 , query object (question or sub-question), indicator I, type label 𝜏, buffer size 𝐾
+Output  : Matched exemplars E𝑚𝑎𝑡𝑐ℎ (optional), updated pool 1   𝑒q ← Encode(𝑞); 𝑒I  ← Encode(I);
+2   E𝑚𝑎𝑡𝑐ℎ  ← ANN_Search(E𝑝𝑜𝑜𝑙, [𝑒q,𝑒I], filter: type = 𝜏, top-𝐾); 3   RankBy(𝜆sim · sim + 𝜆hit · hit_count);
+4   Return E𝑚𝑎𝑡𝑐ℎ;
+5   Procedure WriteBackIfSuccess(E𝑝𝑜𝑜𝑙,𝑞,I,𝑎,𝑃)
+6   Store(𝑞,I,𝑎,𝑃,𝜏,embeddings = [𝑒q,𝑒I],suficient = true); 7   UpdateBufferStats(𝑞,I);
+8   Procedure MemoryLookupAndTest(𝑞,I, E𝑝𝑜𝑜𝑙 ) 9   𝐻𝑖𝑠𝑡 ← Retrieve(𝑞,I,filter: type = 𝜏);
+ˆ
+10   for each (𝑎,𝑃) ∈ 𝐻𝑖𝑠𝑡 do
+ˆ
+ˆ
+ˆ	ˆ
+11	if Sufficient(𝑞,I,𝑎,𝑃) then Return 𝑎,𝑃,sufficient = true ;
+ˆ
+12   Return ⊥,⊥,sufficient = false;
+MemoTime : Memory-Augmented Temporal Knowledge Graph Enhanced Large Language Model Reasoning	WWW ’26, April 13–17, 2026, Dubai, United Arab Emirates
+
+Table 5: Multi-granularity temporal reasoning on Hits@1. Best in each column is in bold.
+
+
+Model	Equal
+Day	Month	Year
+
+Before/After
+Day	Month	Year
+
+Equal-Multi
+Day	Month	Year
+
+
+
+BERT                                                    4.9         10.3 DistillBERT                                         4.1          8.7 ALBERT                                               6.9          8.2
+EmbedKGQA	20.0	33.6 CronKGQA	42.5	38.9 MultiQA	44.5	39.3
+MemoTime w/ DeepSeek-V3     85.6        85.1 MemoTime w/ GPT-4-Turbo     85.8        85.0
+
+13.6	15.0	16.4 11.3	16.0	15.0 13.2	22.1	27.7
+21.8	39.2	51.8 33.1	37.5	47.4 35.0	37.9	54.8
+92.3      81.4        77.4 93.8     92.5       86.2
+
+17.5	6.4	10.2	9.0 18.6	9.6	12.7	8.9 30.8      10.3	14.4        14.4
+51.1	14.5	32.1	26.3 45.0	29.5	33.3	25.1 52.5	30.8	32.1	28.3
+82.4      60.0        55.3        53.2 94.1     68.4       70.4        64.4
+
+
+Table 6: Eficiency analysis of MemoTime on MultiTQ.
+
+
+
+Average Depth Average Branch Average LLM Calls Running Time (s)
+
+Overall
+1.37 2.64 8.75 43.11
+
+After–First
+2.12 3.91 11.55 58.11
+
+Before–Last
+2.00 3.94 11.49 57.89
+
+Equal–Multi
+1.57 3.05 9.88 48.86
+
+First/Last
+1.00 2.00 7.42 35.70
+
+Before/After    Equal
+1.54                1.04 2.78                2.01 9.10                7.32 45.34              35.42
+
+
+
+
+B	Additional Experiments	B.2	Eficiency Analysis
+
+B.1	Multi-Granular Temporal QA Analysis
+We further evaluate MemoTime on temporal reasoning tasks that require distinguishing and aligning facts across different temporal granularities, including day, month, and year levels. This setting examines whether models can adapt to diverse temporal resolutions and maintain consistent reasoning performance. As shown in Ta-ble 5, traditional pre-trained and embedding-based baselines exhibit significant degradation as the temporal resolution becomes finer or when multiple granularities are combined. For example, while MultiQA achieves 44.5% accuracy on the Equal–Day level, its per-formance drops sharply to 28.3% on Equal–Multi–Year, indicating that these models struggle to maintain chronological consistency when reasoning across mixed time scales.
+In contrast, MemoTime consistently achieves strong and sta-ble results across all granularities and operators, reaching up to 94.1% Hits@1 on Before/After–Year and maintaining 70.4% under the most complex Equal–Multi–Month setting. The consistent im-provement across both fine-grained and compound temporal tasks demonstrates that MemoTime effectively adapts to the diversity of temporal reasoning requirements. This robustness is mainly attributed to two key components: (1) operator-aware decompo-sition, which dynamically adjusts reasoning depth and retrieval scope according to the temporal operator, and (2) temporal path construction, which enforces monotonic timestamp progression and co-aligns evidence across multiple resolutions. Together, these mechanisms enable unified and faithful temporal reasoning while preserving interpretability across heterogeneous granularities.
+
+To comprehensively evaluate the eficiency of MemoTime, we con-duct three analyses on the MultiTQ dataset: LLM calls cost analysis, running time analysis, and computational cost analysis. Table 6 presents the averaged statistics across different question types, pro-viding insights into reasoning eficiency and structural scalability.
+LLM calls cost analysis. To measure the eficiency of utilizing LLMs, we analyze the average number of LLM calls required to com-plete a reasoning cycle across different question types. As shown in Table 6, MemoTime performs an average of 8.75 calls per ques-tion, demonstrating its lightweight decomposition and reasoning pipeline. For simple operator types such as Equal and First/Last, the number of calls remains low (7–7.5), corresponding to a single reasoning round without recursive decomposition. In contrast, com-plex composite operators including After–First and Before–Last require deeper temporal validation, resulting in approximately 11.5 LLM calls. These results demonstrate that MemoTime maintains eficient reasoning, even for multi-hop and temporally constrained queries, by avoiding redundant invocations through structured decomposition and memory reuse.
+Running time analysis. To further assess inference eficiency, we examine the average running time per question for different temporal types. The overall average runtime of MemoTime is 43.11 seconds per question, indicating an effective balance between re-trieval and reasoning processes. Operator-specific analysis shows thatsingle-hopornon-nestedoperatorssuchasEqualandFirst/Last complete within approximately 35 seconds, whereas multi-hop operators like After–First and Before–Last require additional re-trieval and temporal alignment, increasing the runtime to around 58 seconds. Despite these additional steps, MemoTime preserves
+WWW ’26, April 13–17, 2026, Dubai, United Arab Emirates	Xingyu Tan et al.
+
+Table 7: MemoTime toolkit library with purposes, key parameters, and operator mappings.
+
+Toolkit	Purpose	Key parameters	Operator mapping
+
+OneHop	One-hop neighbors with temporal filters      entity, direction, after/before, limit	seed	local
+
+AfterFirst
+BeforeLast
+
+First Nth event after a cutoff
+Last Nth event before a cutoff
+
+entity, after, relation_filter, limit=N
+entity, before, relation_filter, limit=N
+
+
+after_first
+
+before_last
+
+BetweenRange	Events within a time window	entity, between=(start,end), granularity	during	between
+DayEvents	Global events on a specific date	date, relation_filter, limit	same-day	snapshot
+Month/YearEvents      Global events in a month/year	month or year, relation_filter, limit	same-month	same-year
+
+DirectConnection
+Timeline
+
+Direct edges between two entities
+Chronological sequence for an entity
+
+entity1, entity2, direction, time filters
+entity, direction, after/before, limit
+
+
+pairwise
+
+ordering
+
+
+validate
+
+stitch
+
+
+
+
+
+scalability by dynamically pruning irrelevant temporal paths and parallelizing evidence collection within each hierarchical layer.
+Computational cost analysis. To evaluate the structural efi-ciency of temporal reasoning, we analyze the average recursion depth and branching factor, which jointly characterize the complex-ity of decomposition and search. MemoTime exhibits a compact reasoning structure, with an average recursion depth of 1.37 and branching factor of 2.64, indicating eficient but expressive reason-ing behavior. As shown in Table 6, composite operators such as After–First and Before–Last require deeper reasoning hierarchies (depth around 2) and broader exploration (branch factor close to 4), whereas simpler operators such as Equal and First/Last remain shallow and nearly linear (depth near 1, branch factor around 2). These results demonstrate that MemoTime dynamically adjusts its computational footprint according to the temporal operator’s se-mantic complexity, achieving consistent temporal alignment while maintaining eficient reasoning performance.
+
+B.3	Case Study: Temporal Interpretability and Faithful Reasoning
+To demonstrate how MemoTime performs interpretable and tem-porally faithful reasoning, in this section, we present case studies across different temporal question types in Tables 9–13. Each case study illustrates how complex temporal questions are decomposed into sub-questions with structured indicators, toolkit selections, and retrieved factual quadruples. Through examples involving di-verse operators such as afterNfirst, beforeNlast, and between, we show how MemoTime incrementally constructs temporal reasoning chains that maintain monotonic time ordering, respect operator-specific constraints, and yield consistent answers. These exam-ples highlight how the proposed framework ensures transparency and temporal faithfulness throughout the reasoning process, pro-ducing clear, explainable evidence trails that align with human-understandable logical steps.
+
+C	Toolkit Library
+We implement eight specialized temporal retrieval toolkits expos-ing a unified interface with normalized parameters. Table 7 outlines their core purposes, key parameters, and corresponding temporal
+
+operators. The tools are composable and operator-aware under tem-poral constraints. They cover the majority of temporal reasoning patterns required for multi-hop question answering.
+
+D	Experiment Details
+Experiment Datasets. Previous studies have revealed that the widely used CronQuestions dataset [30] contains spurious corre-lations that models can exploit to achieve inflated accuracy [38]. Following the analysis in [35], we therefore evaluate MemoTime on two more reliable and temporally challenging benchmarks: MultiTQ [6] and TimeQuestions [18]. MultiTQ is the largest pub-licly available Temporal Knowledge Graph Question Answering (TKGQA) dataset, constructed from the ICEWS05–15 event data-base, which records politically and socially significant events with precise timestamps. It consists of more than 500K question–answer pairs, covering 15 years of temporal scope. Each question is auto-matically generated from event triples (ℎ,𝑟,𝑡,𝜏) and further refined to ensure diversity in natural language phrasing. The dataset sup-ports multiple temporal granularities (year, month, and day), with questions distributed across over 3,600 calendar days. MultiTQ en-compasses a wide range of temporal reasoning operators, including before, after, equal, first, and last, and contains both single-hop and multi-hop reasoning cases that require combining multiple tempo-ral relations to derive the final answer. In contrast, TimeQuestions is a smaller but linguistically richer benchmark designed to test compositional and relational temporal reasoning. It contains around 16Kmanuallycuratedquestionsspanningfourreasoningcategories: Explicit, Implicit, Temporal, and Ordinal. Unlike MultiTQ, it uses only yearly granularity and focuses on questions that involve rea-soning over alignment and temporal order rather than precise times-tamps. Each question is grounded in Wikidata events and entities, with linguistic templates textasizing contextual reasoning, event sequencing, and temporal comparisons across multiple entities. The detailed statistics of both datasets, including splits by reasoning type and dataset size, are summarized in Table 8.
+Baselines. We compare MemoTime against a comprehensive set of baselines covering three major methodological categories: pre-trained language models, knowledge graph embedding methods, and LLM-based reasoning methods.
+MemoTime : Memory-Augmented Temporal Knowledge Graph Enhanced Large Language Model Reasoning	WWW ’26, April 13–17, 2026, Dubai, United Arab Emirates
+
+
+On MultiTQ, we include: (1) Pre-trained language models (PLMs) such as BERT [8] and ALBERT [21], which are fine-tuned for QA overtemporalcontexts;(2)Embedding-basedtemporalKGQAmeth-ods, including EmbedKGQA [37], CronKGQA [36], and MultiQA [5], which leverage temporal embeddings to align question representa-tions with time-stamped entity triples; (3) LLM-based in-context learning (ICL) approaches, such as direct instruction prompting (IO), KG-RAG [4], ReAct-KB [4, 61], ARI [4], and TempAgent [13], which combine TKG and reasoning via ChatGPT or similar models. On TimeQuestions, we evaluate: (1) Static KGQA baselines, in-cluding PullNet [42], Uniqorn [34], and GRAFT-Net [41], which op-erate on non-temporal knowledge graphs; (2) Temporal KGQA base-lines, including CronKGQA [36], TempoQR [28], EXAQT [18], and LGQA [25]; (3) LLM-based methods, including instruction prompt-ing (IO) and two fine-tuned reasoning models: GenTKGQA [11], which fine-tunes TKG with LLaMA2-7B, and TimeR4 [35], which
+couples a jointly fine-tuned retriever with ChatGPT reasoning. For  each  baseline,  we  adopt  the  reported  performance  val-
+ues from their original publications to ensure comparability un-der consistent evaluation settings. Following [27, 43, 47], we use exact match accuracy (Hits@1) as the principal evaluation metric. Recall and F1 scores are not used since knowledge sources are not limited to document databases [27, 43].
+Experiment Implementation. All experiments are conducted using GPT-4-Turbo as the primary reasoning backbone for Mem-oTime. To validate the generality and plug-and-play adaptability of our framework, we further instantiate MemoTime with several alternative LLMs, including DeepSeek-V3, Qwen3-Next-80B-A3B-Instruct  (Qwen3-80B),  Qwen3-32B,  Qwen3-8B,  and  Qwen3-4B. These models represent a diverse spectrum of capacities and archi-tectural scales, allowing us to evaluate how MemoTime performs under different model sizes and decoding behaviors. Following prior work [43, 47], the temperature is set to 0.4 during the evi-dence exploration phase to encourage reasoning diversity, and to 0 during the final answer generation stage to ensure deterministic output.The maximum generation length is 256 tokens. Sentence-BERT [8] is utilized as dense retrieval module (DRM). For tempo-ral path construction, we set 𝑊max  = 3, 𝐷max  = 3, 𝑊1  = 80, and 𝜆sem  = 0.6. During the experience memory phase, we use 𝜆sim  = 0.6, 𝜆hit  = 0.4, and𝑊exp  = 10. All experiences are dynamically learned from verified reasoning traces, with five predefined exemplars used for cold-start initialization. The database buffer size is set to 200 for eficiency. The complete code implementation of MemoTime is publicly available.1
+
+Table 8: Statistics of MultiTQ and TimeQuestions.
+
+Category	Train	Dev	Test
+
+MultiTQ
+
+Equal	135,890	18,983	17,311 Single	Before/After          75,340	11,655	11,073
+First/Last	72,252	11,097	10,480
+Equal-Multi	16,893	3,213	3,207 Multiple	After-First	43,305	6,499	6,266
+Before-Last	43,107	6,532	6,247
+Total (MultiTQ)	386,787	57,979	54,584
+
+TimeQuestions
+
+Explicit	2,724	1,302	1,311 Implicit                                              651            291            292 Temporal	2,657	1,073	1,067 Ordinal                                               938            570            567
+Total (TimeQuestions)	6,970	3,236	3,237
+
+
+
+
+
+
+
+
+
+
+
+
+1https://github.com/SteveTANTAN/Memotime.
+WWW ’26, April 13–17, 2026, Dubai, United Arab Emirates	Xingyu Tan et al.
+
+Table 9: Case study of interpretability and temporal faithfulness reasoning for “After the 2008 Olympics, which country was the first to sign an environmental treaty with China?”
+
+
+Question Temporal Type Topic Entities
+Overall Indicator
+
+
+Q1
+Selected Seed Indicator (quadruple) Time vars
+Toolkit & Params Retrieved Facts
+
+Sub-answer
+
+Q2
+Selected Seed Indicator (quadruple) Time vars
+Toolkit & Params Retrieved Facts
+
+
+Sub-answer
+
+Temporal Reasoning Chain
+Temporal Faithfulness Final Answer
+Response
+
+After the 2008 Olympics, which country was the first to sign an environmental treaty with China? afterNfirst (requires 𝑡2  > 𝑡1 and min(𝑡2))
+[Olympics 2008, China]
+Edges: (Olympics 2008, opening, ?𝑥, 𝑡1), (?𝑦, sign environmental treaty, China, 𝑡2) Constraints: 𝑡2  > 𝑡1, after_first(𝑡2,𝑡1)
+Time vars: [𝑡1,𝑡2]
+When was the 2008 Olympics held (opening anchor)? [Olympics 2008]
+(Olympics 2008, opening, ?𝑥, 𝑡1) [same_year(𝑡1, 2008)]
+OneHop(entity = Olympics 2008, after = 2008-01-01, before = 2009-01-01) (Olympics 2008, opening, Beijing, 2008−08−08);
+(Olympics 2008, closing, Beijing, 2008−08−24)
+𝑡1  = 2008−08−08 (use opening as temporal anchor; ?x = Beijing)
+
+After 2008−08−08, which country first signed an environmental treaty with China? [China]
+(?𝑦, sign environmental treaty, China, 𝑡2) [after(𝑡2, 2008-08-08),after_first(𝑡2, 2008-08-08)]
+AfterFirst(entity = China, after = 2008-08-08, relation_filter = sign environmental treaty) (Japan, sign_treaty_env, China, 2009−02−10);
+(Korea, sign_treaty_env, China, 2009−07−18); (Germany, sign_treaty_env, China, 2010−03−02)
+Japan, 𝑡2  = 2009−02−10 (earliest valid time after 2008-08-08)
+
+Olympics 2008 −−−−−−−→ Beijing   {   Japan −−−−−−−−−−−→ China (after_first 2008-08-08).
+opening	sign_treaty_env
+2008-08-08	2009-02-10
+All facts satisfy 𝑡2  > 𝑡1; min(𝑡2) = 2009-02-10; monotonic ordering verified. Japan.
+“Anchoring 𝑡1 at 2008-08-08 (opening of the Olympics), the earliest post-anchor treaty signing with China is by Japan on 2009-02-10, earlier than Korea (2009-07-18) and Germany (2010-03-02). Hence, the after first constraint selects Japan.”
+MemoTime : Memory-Augmented Temporal Knowledge Graph Enhanced Large Language Model Reasoning	WWW ’26, April 13–17, 2026, Dubai, United Arab Emirates
+
+Table 10: Case study of interpretability and temporal faithfulness reasoning for “Who was the last leader to visit Beijing before 2010?”
+
+
+Question Temporal Type Topic Entities
+Overall Indicator
+
+
+Q1
+Selected Seed Indicator (quadruple) Time vars
+Toolkit & Params Retrieved Facts
+
+
+Sub-answer
+
+Q2
+Selected Seed Indicator (quadruple) Time vars
+Toolkit & Params Retrieved Facts Sub-answer
+Temporal Reasoning Chain
+Temporal Faithfulness Final Answer
+Response
+
+Who was the last leader to visit Beijing before 2010? beforeNlast (requires 𝑡1  < 2010 and max(𝑡1)) [Beijing, leader]
+Edges: (?𝑥, visit, Beijing, 𝑡1)
+Constraints: 𝑡1  < 2010, before_last(𝑡1,2010) Time vars: [𝑡1]
+Which leaders visited Beijing before 2010? [Beijing]
+(?𝑥, visit, Beijing, 𝑡1) [𝑡1  < 2010]
+Before(entity = Beijing, before = 2010-01-01, relation_filter = visit) (Barack Obama, visit, Beijing, 2009−11−15);
+(Gordon Brown, visit, Beijing, 2009−08−10); (Angela Merkel, visit, Beijing, 2008−12−05)
+Candidate set = [Obama 2009-11-15, Brown 2009-08-10, Merkel 2008-12-05].
+
+Among them, who visited most recently before 2010? [Candidate leaders]
+(?𝑥, visit, Beijing, 𝑡1) [before(𝑡1,2010),  last(𝑡1)]
+FirstLast(mode = last, relation_filter = visit, before = 2010-01-01, sort = desc, limit = 1) (BarackObama, visit, Beijing, 2009−11−15)
+Barack Obama, 𝑡1  = 2009-11-15 (latest valid before 2010).
+
+Barack Obama −−−−−−−→ Beijing (before_last 2010). 2009-11-15
+visit
+All events satisfy 𝑡1  < 2010; max(𝑡1) = 2009-11-15; temporal order monotonic. Barack Obama.
+“Filtering visits to Beijing with 𝑡1  < 2010 yields three leaders; the most recent timestamp (2009-11-15) corresponds to Barack Obama, fulfilling the before last constraint.”
+WWW ’26, April 13–17, 2026, Dubai, United Arab Emirates	Xingyu Tan et al.
+visit
+held_in
+
+Table 11: Case study of interpretability and temporal faithfulness reasoning for “Before the 2010 Summit, which leader visited Beijing last?”
+
+
+Question Temporal Type Topic Entities
+Overall Indicator
+
+
+Q1
+Selected Seed Indicator (quadruple) Time vars
+Toolkit & Params Retrieved Facts Sub-answer
+Q2
+Selected Seed Indicator (quadruple) Time vars
+Toolkit & Params Retrieved Facts
+
+
+Sub-answer
+
+Before the 2010 Summit, which leader visited Beijing last? beforeNlast (requires 𝑡2  < 𝑡1 and max(𝑡2))
+[2010 Summit, Beijing]
+Edges: (Leader, visit, Beijing, 𝑡2), (2010 Summit, held_in, ?𝑥, 𝑡1) Constraints: 𝑡2  < 𝑡1, before_last(𝑡2,𝑡1)
+Time vars: [𝑡1,𝑡2]
+When was the 2010 Summit held? [2010 Summit]
+(2010 Summit, held_in, ?𝑥, 𝑡1) [specific_year(𝑡1,2010)]
+OneHop(entity = 2010 Summit, after = 2010-01-01, before = 2011-01-01) (2010 Summit, held_in, Toronto, 2010-06-26)
+𝑡1  = 2010-06-26 (used as upper temporal boundary)
+Before 2010-06-26, which leader visited Beijing last? [Beijing]
+(?𝑦, visit, Beijing, 𝑡2)
+[before(𝑡2,2010-06-26),before_last(𝑡2,2010-06-26)]
+BeforeLast(entity = Beijing, before = 2010-06-26, relation_filter = visit) (Barack Obama, visit, Beijing, 2009-11-15);
+(Gordon Brown, visit, Beijing, 2009-08-10); (Angela Merkel, visit, Beijing, 2008-12-05)
+Barack Obama, 𝑡2  = 2009-11-15 (latest valid time before 2010-06-26)
+
+
+
+Temporal Reasoning Chain
+
+Barack Obama  −−−−−−−→ Beijing
+2009-11-15
+2010-06-26).
+
+{
+
+2010 Summit  −−−−−−−→ Toronto (before_last 2010-06-26
+
+
+
+Temporal Faithfulness Final Answer
+Response
+
+All facts satisfy 𝑡2  < 𝑡1; max(𝑡2) = 2009 − 11 − 15; monotonic order verified. Barack Obama.
+“Anchoring 𝑡1 at 2010-06-26 (2010 Summit), the last recorded visit to Beijing before this date was by Barack Obama on 2009-11-15. Earlier visits (Gordon Brown 2009-08-10, Angela Merkel 2008-12-05) confirm Obama as the before_last case.”
+MemoTime : Memory-Augmented Temporal Knowledge Graph Enhanced Large Language Model Reasoning	WWW ’26, April 13–17, 2026, Dubai, United Arab Emirates
+
+Table 12: Case study of interpretability and temporal faithfulness reasoning for “How many times did the UN hold a climate summit before 2020?”
+
+
+Question Temporal Type Topic Entities
+Overall Indicator
+
+
+Q1
+Selected Seed Indicator (quadruple) Time vars
+Toolkit & Params Retrieved Facts
+
+
+
+
+Sub-answer
+
+Q2
+Selected Seed Indicator (quadruple) Time vars
+Toolkit & Params Retrieved Facts Sub-answer
+Temporal Reasoning Chain
+Temporal Faithfulness Final Answer
+Response
+
+How many times did the UN hold a climate summit before 2020? count + before (requires 𝑡1  < 2020 and aggregation over events) [UN, climate summit]
+Edges: (UN, hold, Summit, 𝑡1)
+Constraints: 𝑡1  < 2020, topic(Summit) = climate Time vars: [𝑡1]
+Which climate summits were held by the UN before 2020? [UN]
+(UN, hold, Summit, 𝑡1) [𝑡1  < 2020]
+Before(entity = UN, before = 2020-01-01, relation_filter = hold, keyword = climate) (UN, hold, ClimateSummit09, 2009−12−07);
+(UN, hold, ClimateSummit13, 2013−11−11); (UN, hold, ClimateSummit15, 2015−12−05); (UN, hold, ClimateSummit19, 2019−09−21); (UN, hold, ClimateSummit21, 2021−11−01)
+Valid events before 2020 = 4 (2009, 2013, 2015, 2019).
+
+Count all valid events that occurred before 2020. [Filtered summits from Q1]
+(UN, hold, ClimateSummit_i, 𝑡1) [count(𝑡1  < 2020)]
+Count(filter = 𝑡1  < 2020) Total = 4 events before 2020.
+4 climate summits held before 2020.
+
+UN −−−−−−−→ ClimateSummit_i (4 instances before 2020). 2009–2019
+hold
+All timestamps 𝑡1  < 2020; aggregation respects strict temporal filter. 4 climate summits.
+“Filtering UN-held climate summits before 2020 yields four valid temporal events (2009, 2013, 2015, 2019). All satisfy 𝑡1  < 2020, ensuring temporally faithful counting.”
+WWW ’26, April 13–17, 2026, Dubai, United Arab Emirates	Xingyu Tan et al.
+held_in	collaborate_with
+
+Table 13: Case study of interpretability and temporal faithfulness reasoning for “Between the 2015 Conference and the 2018 Summit, which company collaborated with Microsoft?”
+
+
+Question
+
+Temporal Type Topic Entities
+Overall Indicator
+
+
+
+Q1
+Selected Seed Indicator
+Toolkit & Params Retrieved Facts Sub-answer
+Q2
+Selected Seed Indicator
+Toolkit & Params Retrieved Facts Sub-answer
+Q3
+Selected Seed Indicator Time vars
+Toolkit & Params Retrieved Facts
+
+
+Sub-answer
+
+Between the 2015 Conference and the 2018 Summit, which company collaborated with Mi-crosoft?
+between (requires 𝑡1  < 𝑡3  < 𝑡2 and bounded interval) [2015 Conference, 2018 Summit, Microsoft]
+Edges: (2015 Conference, held in, ?𝑥, 𝑡1), (2018 Summit, held in, ?𝑦, 𝑡2), (?𝑧, collaborate with, Microsoft, 𝑡3)
+Constraints: 𝑡1  < 𝑡3  < 𝑡2, between(𝑡3, [𝑡1,𝑡2]) Time vars: [𝑡1,𝑡2,𝑡3]
+When was the 2015 Conference held? [2015 Conference]
+(2015 Conference, held in, ?𝑥, 𝑡1)
+OneHop(entity = 2015 Conference, after = 2015-01-01, before = 2016-01-01) (2015 Conference, held_in, New York, 2015-09-10)
+𝑡1  = 2015-09-10
+When was the 2018 Summit held? [2018 Summit]
+(2018 Summit, held in, ?𝑦, 𝑡2)
+OneHop(entity = 2018 Summit, after = 2018-01-01, before = 2019-01-01) (2018 Summit, held_in, Singapore, 2018-11-22)
+𝑡2  = 2018-11-22
+Between 𝑡1 and 𝑡2, which company collaborated with Microsoft? [Microsoft]
+(?𝑧, collaborate with, Microsoft, 𝑡3) [between(𝑡3, [𝑡1,𝑡2])]
+BetweenRange(entity = Microsoft, between = (𝑡1, 𝑡2), relation_filter = collaborate with) (NVIDIA, collaborate_with, Microsoft, 2016-05-20);
+(OpenAI, collaborate_with, Microsoft, 2018-03-14); (Apple, collaborate_with, Microsoft, 2019-02-10)
+NVIDIA (2016-05-20) and OpenAI (2018-03-14), both satisfying 𝑡1  < 𝑡3  < 𝑡2
+
+
+
+Temporal Reasoning Chain
+
+
+Temporal Faithfulness
+Final Answer
+
+2015 Conference −−−−−−−→ New York   {   NVIDIA −−−−−−−−−−−−→ Microsoft 2015-09-10	2016-05-20
+−−−−−−−−−−−−→ Microsoft   {   2018 Summit −−−−−−−→ Singapore. 2018-03-14	2018-11-22
+collaborate_with	held_in
+All facts satisfy 𝑡1  < 𝑡3  < 𝑡2; valid interval reasoning confirmed. NVIDIA, OpenAI.
+
+{   OpenAI
+
+Response	“Anchoring the 2015 Conference at 2015-09-10 and the 2018 Summit at 2018-11-22, the companies collaborating with Microsoft within this interval are NVIDIA (2016) and OpenAI (2018). Both satisfy the temporal between constraint.”
+MemoTime : Memory-Augmented Temporal Knowledge Graph Enhanced Large Language Model Reasoning	WWW ’26, April 13–17, 2026, Dubai, United Arab Emirates
+
+E	Prompts
+In this section, we detail the prompts required for our main experimental procedures.
+
+Temporal Type Classification Prompt Template
+
+Given a natural-language question that may include explicit dates, relative temporal expressions, or comparative phrases, your task is to classify it into exactly one supported temporal type that best represents its temporal intent and logical operator. If multiple categories appear possible, choose the most specific operator-sensitive type.
+Supported temporal types (single label only): equal,   before,   after,   during,   between,   first,   last,   beforeNlast, afterNfirst,  count,  comparison.
+Experience Examples: {In-Context  Few-shot}
+Q: {Question} A:
+
+
+The {In-Context  Few-shot} examples are retrieved from experience memory, representing previously successful classification traces. They guide the model in identifying the temporal operator patterns (e.g., “first Y after Z”) and selecting the most appropriate category.
+
+
+Question Tree Construction Prompt Template
+
+Given a temporal question and its classified type {Question_Type}, your task is to decompose it into a structured reasoning tree that contains complete subquestions, indicators, explicit temporal constraints, and time variables.
+Map the question to its most relevant decomposition pattern according to its temporal operator and structural characteristics. Generate subquestions that reflect key reasoning steps, construct indicators for entity–relation–time tuples, and specify explicit temporal constraints (e.g., t2 > t1, before(t2, t1)). Each subquestion must be a complete, grammatically correct sentence, and all time variables should preserve monotonic order (𝑡1  ≤ 𝑡2  ≤ ... ≤ 𝑡𝑛). Use ?x, ?y for unknown entities and t1, t2 for time variables. Represent indicators as Entity1  –[relation]–>  Entity2  (t). Return the output strictly in the following format:
+Subquestions:  [sub1,  sub2,  ...] Indicators:	[edge1,  edge2,  ...]
+Constraints:    [constraint1,  constraint2,  ...] Time_vars:	[t1,  t2,  ...]
+
+Experience Examples: {In-Context  Few-shot}
+Q: {Question} A:
+
+The {Question_Type} is obtained from the temporal classification stage. Each retrieved example in {In-Context  Few-shot} illustrates how similar questions were decomposed into substeps, indicators, and constraints, guiding the model to align with proven reasoning patterns.
+
+
+Seed Selection Prompt Template
+
+Given a subquestion, its reasoning indicator, the topic entities, and optional contextual or temporal hints, your task is to select a concise set of seed entities to initialize retrieval. Prefer specific, high-yield entities that anchor reasoning paths; avoid overly broad categories. If multiple options exist, choose the minimal set that best covers the intended reasoning target.
+Experience Examples: {In-Context  Few-shot}
+Q: {Subquestion}
+Think Indicator: {Think_Indicator} Available Topic Entities: {Available_Entities} Context Info (optional): {Context_Info} Time Hints (optional): {Time_Hints}
+A:
+
+Seed selection prompts guide the retrieval initialization phase in Section 4.3. The examples retrieved from memory illustrate successful entity anchors for similar subquestions, enabling the model to leverage prior reasoning experience when determining where to begin exploration.
+WWW ’26, April 13–17, 2026, Dubai, United Arab Emirates	Xingyu Tan et al.
+
+
+Experience-Guided Toolkit Selection Prompt Template
+
+Given a subquestion, its reasoning indicator, temporal type, and contextual information, your task is to select the most suitable temporal toolkit(s) for solving it. Multiple toolkits may be selected if the reasoning requires combined temporal operations.
+You should identify which toolkit(s) align with the temporal operator and reasoning goal of the question. Recommend the most appropriate toolkit configuration(s), specifying both parameters and reasoning rationale.
+Available toolkits with descriptions: {Available_toolkits} Expected Output (JSON):
+{  "selected_toolkits":  [  {"original_name":  "ToolkitName",  "reasoning":  "Reason  statement",  "priority":  1 "parameters":  {"entity1":  "...",  "entity2":  "...",  "limit":  "Number",  ...}}]  }
+
+Experience Examples: {In-Context  Few-shot}
+Q: {Subquestion}
+Think Indicator: {Think_Indicator} Temporal Type: {Question_Type} Seed Info: {Seed_Info}
+Time Hints: {Time_Hints} A:
+
+When a similar trace exists in the experience pool, MemoTime retrieves exemplar toolkit configurations as few-shot examples. Otherwise, the model enters a cold-start mode and infers a configuration from the question structure and temporal hints. Each selected toolkit represents a specific reasoning pattern (e.g., event ordering, interval comparison, timeline construction).
+
+
+Multiple Toolkits Debate–Vote Prompt Template
+
+Given a subquestion and the outputs generated by multiple temporal toolkits, your task is to evaluate and compare their results to determine which toolkit provides the most accurate, temporally faithful, and semantically consistent answer. Each toolkit represents a distinct reasoning or retrieval strategy, and their outputs may vary in completeness, reliability, and explanatory depth.
+The evaluation process compares all toolkit outputs across several complementary dimensions. Each candidate answer is assessed for its relevance to the subquestion, temporal faithfulness to the given time constraints, and path validity within the temporal knowledge graph. The model further considers evidence completeness, semantic consistency, and the adequacy of each toolkit’s configuration and parameters. When multiple valid but conflicting answers arise, preference is given to the one exhibiting stronger temporal grounding, clearer provenance, and greater explanatory transparency. Through this comparative reasoning, the model identifies the toolkit whose output demonstrates the most coherent, temporally consistent, and well-supported reasoning chain. Expected Output (JSON):
+{
+"winning_toolkit":  <integer>, "winning_answer":  {
+"entity":  "<string>",  "time":  "<YYYY[-MM[-DD]]  or  Unknown>",
+"path":  ["head",  "relation",  "tail"],  "score":  <float>,  "reason":  "<concise  selection  rationale>" },
+"evaluation":  { "criteria_scores":  {
+"toolkit_1":  {"relevance":  <0-1>,  "accuracy":  <0-1>,  "completeness":  <0-1>} "toolkit_2":  {"relevance":  <0-1>,  "accuracy":  <0-1>,  "completeness":  <0-1>} ...//include  all  evaluated  toolkits  },
+"overall_winner":  "<Toolkit  number>",  "reasoning":  "<short  comparative  analysis  across  toolkits>"  } }
+
+Successful Examples: {In-Context  Few-shot}
+Q: {Subquestion}
+Toolkit Results: {Collected_Results} A:
+
+
+This prompt is used at the debate–vote stage, where MemoTime aggregates and evaluates the outputs from all executed temporal toolk-its. The model receives structured evidence from each toolkit—including reasoning paths, timestamps, parameters, and explanatory notes—and performs comparative reasoning according to the defined evaluation process. The decision prioritizes temporal faithfulness,
+MemoTime : Memory-Augmented Temporal Knowledge Graph Enhanced Large Language Model Reasoning	WWW ’26, April 13–17, 2026, Dubai, United Arab Emirates
+
+evidence completeness, and semantic consistency, ensuring that the final selected answer is both contextually grounded and logically coherent across all candidate toolkits.
+
+LLM-aware Selection Prompt Template
+
+Given the main question, a chain of thought generated by the LLM that considers all entities, a set of split subquestions, and their retrieved knowledge graph paths, your task is to score the candidate paths and identify the top three that are most likely to contain the correct evidence for the question.
+Successful Examples: {In-Context  Few-shot}
+Q: {Query}
+Think Indicator: {Think_Indicator} Candidate Paths: {Candidate_Paths} A:
+
+This prompt lets the LLM act as a reasoning critic, ranking candidate paths using patterns learned from previous reasoning examples. The {In-Context  Few-shot} samples come from successful path selections in prior tasks, demonstrating how to evaluate relevance, temporal
+ordering, and completeness.
+
+Suficiency Evaluation Prompt Template
+
+Given a question (or subquestion), its candidate answer(s), retrieved evidence paths, and reasoning context, your task is to determine whether the information provided is suficient and consistent to answer the target question.
+You should evaluate in two modes:
+•  Local (Subquestion) Suficiency: Assess whether the retrieved evidence and reasoning path for this subquestion are adequate to support the proposed answer. If suficient, respond {True} and restate the answer; otherwise respond {False}, provide a short explanation, and specify one corrective action from {Decompose,  Refine,  Retrieval  Again}.
+•  Global (Full Question) Suficiency: Assess whether the entire reasoning trajectory, including all subquestions, intermediate answers, and aggregated evidence, is coherent and complete enough to answer the main question. If suficient, respond {True} and provide the final answer; otherwise respond {False} with a reason and one corrective action from the same set.
+
+Successful Examples: {In-Context  Few-shot}
+Q: {Question / Subquestion}
+Candidate Answer(s): {Answer_Entity / Final_Answer} Evidence Paths: {Evidence_Paths}
+Reasoning Context / Trajectory: {Subquestions_and_Answers} A:
+
+This unified prompt template supports both local and global suficiency evaluation. At the local level, it determines whether each reasoning step is self-contained and evidence-supported. At the global level, it verifies that the overall reasoning chain forms a temporally consistent, logically complete path leading to the correct final answer.
+
+Question Answering Generation Prompt Template
+
+Given the main question, a reasoning chain of thought think indicator, and the complete reasoning global trajectory (all solved split questions, step answers, aggregated reasoning paths, and used toolkits for each split question), your task is to generate the final answer using the provided knowledge paths and your own reasoning. You should ensure that the final answer is logically consistent with the reasoning trajectory and fully supported by the retrieved paths. If multiple candidate entities are equally valid (e.g., simultaneous events or co-occurring facts), list all of them.
+Successful Examples: {In-Context  Few-shot}
+Q: {Main_Question}
+Think Indicator: {Think_Indicator}
+Global Trajectory Summary: {SolvedQuestions,_Answers,_and_Proofs} A:
+
+This final prompt synthesizes all previous reasoning and evidence into a natural-language answer. The exemplars demonstrate how previous successful reasoning trajectories were concluded, ensuring the generated answer remains temporally faithful, complete, and well-grounded.
