@@ -1,0 +1,607 @@
+﻿This CVPR paper is the Open Access version, provided by the Computer Vision Foundation. Except for this watermark, it is identical to the accepted version;
+6WDJH
+the final published version of the proceedings is available on IEEE Xplore.
+
+
+
+
+
+
+Towards Long-Horizon Vision-Language Navigation: Platform, Benchmark and Method
+
+
+Xinshuai Song1*     Weixing Chen1∗        Yang Liu1,3†     Weikai Chen‡     Guanbin Li1,2,3        Liang Lin1,2,3 1Sun Yat-sen University, China 2Peng Cheng Laboratory 3Guangdong Key Laboratory of Big Data Analysis and Processing
+{songxsh,chenwx228}@mail2.sysu.edu.cn,liuy856@mail.sysu.edu.cn,chenwk891@gmail.com liguanbin@mail.sysu.edu.cn,linliang@ieee.org hcplab-sysu.github.io/LH-VLN
+
+
+&/+9/1 9/1 2EM/RF
+''1
+
+
+/RQJ+RUL]RQ 9LVLRQ/DQJXDJH1DYLJDWLRQ
+7DNHWKHWRZHOLQEDWKURRPWRWKH NLWFKHQLVODQGLQNLWFKHQWKHQJUDEWKH WHDSRWDQGUHOHDVHLWRQWKHFRIIHHWDEOH LQWKHOLYLQJURRP
+
+
+0RYHWR
+0RYHWR
+0RYHWR
+
+'DWD*HQHUDWLRQ1DY*HQ WRZHO	6DPSOLQJ
+'HVFULELQJ
+NLWFKHQ
+WHDSRW
+
+
+
+
+6WDJH
+6WDJH
+
+
+ILQGEDWKWKHUWRRRZPHOLQ
+6WDJH 
+
+6WDJH
+
+ILQLGQWNKLHWFWKHHDQSRW
+
+ILQGWKHNLWFKHQ
+LVODQGLQNLWFKHQ
+
+
+ILQGWKHFRIIHHWDEOH
+LQOLYLQJURRP
+
+
+0RYHWR	WDEOH
+
+%HQFKPDUN/+359/1 )LQGWRZHO )LQGNLWFKHQ )LQGWHDSRW )LQGWDEOH
+LVODQG
+			
+
+6WDJH	Q	Q	Q	Q
+6WDJH
+6WDJH 
+
+
+
+2EMHFW/RFDOL]DWLRQ 1DYLJDWLRQ
+*RWRWKH ORFDWLRQRIWKH ODPSLQEHGURRP
+
+
+'HPDQG'ULYHQ 1DYLJDWLRQ
+
+,ZDQW D FXSRI WHD
+
+
+9LVLRQ/DQJXDJH1DYLJDWLRQ
+
+0RYHIRUZDUGWRWKHHQGRIVRID DQGWXUQOHIWWRWKHKDOOSDVVWKH VRIDDQGWXUQULJKWDWWKHVRID FRUQHUJRVWUDLJKWWRWKHWDEOH
+
+0RGHO1DYLJDWHZLWK&R7 DQG0HPRU\
+
+/7
+2EV	0HPRU\    0HPRU\
+)X]]\
+67 &R7	0HPRU\
+
+Figure 1. Framework Overview. Different from existing vision language navigation, object loco-navigation, and demand-driven navigation benchmarks, LH-VLN divides navigation into multiple subtasks, requiring the agent to complete these tasks sequentially within the scene. Our data generation framework provides a general LH-VLN task generation pipeline, and the newly built LHPR-VLN benchmark for multi-stage navigation tasks. Our navigation model, based on the chain-of-thought (CoT) feedback and adaptive memory design, achieves efﬁcient navigation by utilizing CoT prompts and dynamic long-term and short-term memories.
+
+
+Abstract
+
+Existing  Vision-Language  Navigation  (VLN)  methods primarily focus on single-stage navigation, limiting their effectiveness in multi-stage and long-horizon tasks within complex and dynamic environments. To address these limi-tations, we propose a novel VLN task, named Long-Horizon Vision-Language Navigation (LH-VLN), which emphasizes long-term planning and decision consistency across con-secutive subtasks.   Furthermore, to support LH-VLN, we develop an automated data generation platform NavGen, which  constructs  datasets  with  complex  task  structures and improves data utility through a bidirectional,  multi-granularity generation approach.   To accurately evaluate
+
+*Equal contribution †Corresponding Author
+‡This paper solely reﬂects the author’s personal research and is not as-sociated with the author’s afﬁliated institution.
+
+
+complex tasks,  we construct the Long-Horizon Planning and Reasoning in VLN (LHPR-VLN) benchmark consist-ing of 3,260 tasks with an average of 150 task steps, serv-ing as the ﬁrst dataset speciﬁcally designed for the long-horizon vision-language navigation task. Furthermore, we propose Independent Success Rate (ISR), Conditional Suc-cess Rate (CSR), and CSR weight by Ground Truth (CGT) metrics, to provide ﬁne-grained assessments of task com-pletion.  To improve model adaptability in complex tasks, we propose a novel Multi-Granularity Dynamic Memory (MGDM) module that integrates short-term memory blur-ring with long-term memory retrieval to enable ﬂexible nav-igation in dynamic environments. Our platform, benchmark and method supply LH-VLN with a robust data generation pipeline, comprehensive model evaluation dataset, reason-able metrics, and a novel VLN model, establishing a foun-dational framework for advancing LH-VLN.
+
+
+
+
+12078
+
+
+1. Introduction
+
+Current Vision-Language Navigation (VLN) benchmarks and methods primarily focus on single-stage or short-term tasks, which involve simple objectives and limited action sequences, making them suitable for controlled settings but insufﬁcient for real-world applications [23] (see Figure 1). In practical scenarios, agents must handle complex, long-horizon instructions that span multiple sub-tasks, requiring ongoing decision-making,  dynamic re-planning,  and sus-tained reasoning across extended periods [8, 27, 30]. These capabilities are crucial for applications like autonomous as-sistants or service robots where coherent navigation over a long temporal horizon is essential. To address this gap, we propose, for the ﬁrst time, a new task-coded Long-Horizon VLN (LH-VLN), to evaluate and enhance agents’ abilities to manage multi-stage,  context-rich navigation tasks that more accurately reﬂect real-world complexity.
+The LH-VLN task is dedicated to push agents beyond simple, short-term navigation by requiring them to deeply comprehend complex task instructions, maintain continu-ous navigation, and handle sequential sub-tasks seamlessly across a dynamic environment. Achieving this goal involves three critical components: 1) an automated data generation platform to construct benchmarks with complex task struc-tures and improves data utility, 2) a high-quality benchmark capturing the complexity of long-horizon, multi-stage tasks and accurately assess the agent’s task execution and detailed sub-task performance with reasonable metrics, and 3) a spe-cialized method to equip agents with adaptive memory for complex navigation.  In this work, we provide a compre-hensive solution that addresses these three aspects, laying the foundation for robust LH-VLN in real-world scenarios. Platform-wise, previous platforms [16, 29, 35, 36, 41] for VLN data generation lack sufﬁcient versatility and de-pend on a speciﬁc simulation platform and assets, resulting in relatively limited generated data [6]. To overcome these limitations, we introduce NavGen, a novel data generation platform that automates the construction of complex, multi-stage datasets.  NavGen generates data through a bidirec-tional, multi-granularity approach, producing forward and backward sub-tasks to enrich task diversity and improve data utility.  This automated platform allows for the scal-able creation of richly varied navigation tasks that support advanced model training and long-horizon VLN evaluation. Benchmark-wise, existing VLN benchmarks [17, 20, 48] are limited by their simple task structures, low data diver-sity, and constrained instructional ﬂexibility, which restrict model generalization and hinder support for complex, long-horizon tasks. These benchmarks often rely on manual an-notation,  making them labor-intensive to create and less scalable for handling multi-stage tasks [21, 46].  To over-come these challenges,  we build Long-Horizon Planning and Reasoning in VLN (LHPR-VLN) based on the NavGen
+
+
+platform. LHPR-VLN is the ﬁrst LH-VLN benchmark that consists of 3,260 tasks with an average of 150 task steps. This large-scale benchmark captures the depth and variety required for evaluating long-horizon VLN, encompassing a wide range of sub-task structures and navigation complex-ities.  Additionally, traditional coarse-grained success rates (SR) are inadequate for complex tasks, as task complexity makes it difﬁcult for overall success rates to accurately re-ﬂect model capabilities.  Therefore, we propose three new metrics for more thorough evaluation: Conditional Success Rate (CSR), CSR weighted by Ground Truth (CGT), and Independent Success Rate (ISR), to assess success for each subtasks, capturing the model’s performance at each step and offering a more detailed evaluation of execution across the full scope of LH-VLN challenges.
+Existing VLN methods typically rely on discretizing the environment into static points for path prediction, limiting adaptability in complex, dynamic settings [2, 24, 39, 47]. To bridge this gap and enhance real-world applicability in LH-VLN tasks, we introduce a Multi-Granularity Dynamic Memory (MGDM) module to enhance the model’s adapt-ability and memory handling.  The MGDM module oper-ates by integrating both short-term and long-term memory mechanisms.  While short-term memory blurring and for-getting functions help the model focus on recent, relevant information, long-term memory retrieval pulls in key histor-ical data from previous navigation steps [31]. This combi-nation allows the model to adjust to environmental changes and retain context over extended sequences, addressing the challenges of sustained reasoning and adaptive re-planning in dynamic environments. With MGDM, we achieve state-of-the-art performance on the LH-VLN task, demonstrating its effectiveness in maintaining coherent decision-making and robust navigation over long, multi-stage tasks. Our con-tributions can be summarized as follows:
+•  We propose the LH-VLN task, a new task designed to evaluate agents in complex, multi-stage navigation tasks requiring sustained reasoning and adaptability.
+•  We develop NavGen, an automated data generation plat-form that produces a high-quality, long-horizon dataset, enabling scalable task diversity and improved data utility.
+•  We  introduce  the  LHPR-VLN  benchmark  with  3,260 tasks, each averaging 150 steps, and propose three new metrics for detailed, sub-task-level evaluation.
+•  We  present  the  MGDM  model,  designed  to  enhance model adaptability in dynamic settings through combined short-term and long-term memory mechanisms.
+
+2. Related Work
+2.1. Vision-Language Navigation
+
+Embodied Vision-Language Navigation (VLN) aims to en-able agents to perform navigation tasks in complex envi-
+
+
+
+
+12079
+
+
+
+3URPSWB
+6DPSOLQJ $VVHUWV
+*HQHUDWH
+
+Ș	0RYHWR	YDVH 0RYHWR          FDELQHW
+
+
+
+
+/LYLQJURRP
+.LWFKHQ
+
+
+6LPXODWRU
+
+0RGHO
+
+
+0RYH)RUZDUG
+
+
+
+7XUQ5LJKW
+
+0RYH)RUZDUG +DOOZD\    7XUQ5LJKW
+.LWFKHQ&RXQWHU
+0RYH)RUZDUG .LWFKHQ
+
+3URPSWB
+
+
+
+
+6FHQH3RRO
+
+
+
+
+5RERW3RRO
+
+0RYHWR	IORZHU	.LWFKHQ	([SHUW
+0RYHWR	VLQN	%DWKURRP
+
+0XOWLVWDJH&RPSOH[,QVWUXFWLRQ	7UDMHFWRU\ 7DVNLQVWUXFWLRQ0RYHWKHYDVHLQ        'DWDVHW OLYLQJURRPWRWKHFDELQHWLQNLWFKHQ WKHQJUDEWKHIORZHUQH[WWRLWWRWKH
+VLQNLQEDWKURRP
+
+
+0RYH)RUZDUG
+
+
+
+7UDMHFWRU\6SOLWWLQJ$OJRULWKP
+
+
+*HQHUDWH
+
+6WHSE\6WHS,QVWUXFWLRQ
+7DVNLQVWUXFWLRQ0RYH IRUZDUGDORQJWKHKDOOZD\ WXUQULJKWDWWKHNLWFKHQ FRXQWHUWKHQSURFHHG IRUZDUGWRUHDFKWKHFDELQHW
+
+Figure 2. The NavGen data generation platform. The forward generation generates LH-VLN complex tasks and corresponding subtasks by prompting GPT-4 with sampling asserts. The sampled assets are deployed on the simulator. Based on the navigation model or expert decisions, corresponding trajectory data is generated. In the backward generation, the trajectory of each subtask is split into action-label pairs by trajectory splitting algorithm according to the trajectory type, these pairs are then input into GPT-4 to generate step-by-step tasks.
+
+
+ronments based on language instructions.   Current meth-ods advance in three main directions: map-based strategies, waypoint prediction,  graph-based approaches,  and large-model predictions.   Map-based strategies,  such as VLN-VER [22] and HNR-VLN [37], employ volumetric repre-sentations or neural radiance ﬁelds to facilitate spatial un-derstanding and exploration by the agent. Modular designs like those in FILM [26] integrate language instructions with environmental perception, enhancing task efﬁciency.  The second category,  waypoint prediction-based methods,  in-cludes  models  such  as  ETPNav  [1]  and  MultiPLY  [11], which optimize navigation through key-point prediction and environmental graph learning, thereby supporting improved generalization across discrete and continuous environments [10]. Additionally, large language model-based approaches, including NaviLLM [45] and NaViD [43], excel at inter-preting complex instructions by tightly integrating language reasoning with visual tasks. However, existing methods of-ten remain limited to single-stage tasks and lack consistent planning for long-horizon, multi-stage tasks.
+
+2.2. Benchmark for Vision-Language Navigation
+
+The progression of VLN tasks has been propelled by a range of datasets, each introducing unique challenges and enhanc-ing evaluation benchmarks for embodied agents perform-ing tasks in complex environments.   Early datasets, such as Room-to-Room (R2R) [3] and its extension Room-for-Room (R4R) [12], focus on step-by-step navigation through predeﬁned  paths  with  ﬁne-grained  instructions  based  on static images, while later datasets like VLN-CE [17] shift towards continuous navigation in dynamic spaces, requir-ing more ﬂexible decision-making.  More recent datasets, including CVDN [33], REVERIE [28], and SOON [48], further broaden the scope of VLN by integrating dialogue history, object localization, and complex instruction com-prehension, pushing agents to understand high-level natu-ral language commands and locate speciﬁc targets.  Mean-while,  OVMM [42] and Behavior-1K [20] add layers of
+
+complexity by incorporating navigation, manipulation, and object interaction, simulating extended real-world tasks that involve multiple sub-tasks. IVLN [18] and Goat-Bench [15] allow the agent to continuously complete multiple indepen-dent single-target navigation tasks while maintaining mem-ory.  Despite these progresses, there is still a notable gap in benchmarks that support LH-VLN with multi-stage sub-tasks in highly complex environments.
+
+3. Platform, Benchmark, and Metrics
+
+We developed a data generation platform named NavGen, speciﬁcally designed to support the data needs of the LH-VLN task.  Based on this platform, we created the LHPR-VLN benchmark to evaluate model performance in terms of long-term planning capabilities within this task.
+
+3.1. NavGen
+The NavGen platform integrates automated data genera-tion with a bi-directional generation mechanism to produce task instructions and associated trajectory data.  The two-pronged approach includes forward data generation, which focuses on complex LH-VLN task creation, and backward data generation, which decomposes multi-stage navigation sub-tasks into granular, actionable steps, shown in Fig. 2.
+
+3.1.1    Forward Data Generation
+
+In the forward data generation phase, we utilize GPT-4 to create task instructions by synthesizing scene assets and robot conﬁgurations, as shown in Fig. 2.  Speciﬁcally, our scene assets come from the HM3D dataset [40], which of-fers a rich collection of 3D panoramic scenes annotated se-mantically across 216 settings, providing an extensive foun-dation for task creation. Additionally, robot conﬁgurations are carefully tailored to different robotic platforms,  such as Boston Dynamics’ Spot and Hello Robot’s Stretch, each with unique camera heights, task spaces, and sensor param-eters to accommodate a variety of tasks.  With these assets
+
+
+
+
+12080
+
+Benchmark	Avg. Instruction Length   Avg. Task Steps	Simulator	Task Type	Scenes   Task Num
+
+R2R [3]	29 REVERIE [28]	18 VLN-CE [17]	30 FAO [48]	39 Behavior-1k [20]                         3.27 IVLN [18]                                       -Goat-Bench [15]                            -LHPR-VLN (Ours)                    18.17
+
+<8               Matterport3D       Step-by-step Nav           90           21567 <8               Matterport3D          Obj Loco-nav              90           21702
+55.88                   Habitat             Step-by-step Nav           90            4475 10                Matterport3D          Obj Loco-nav              90            3848
+-                  OmniGibson     Complex Housework       50            1000 -                 M3D&Habitat          Iterative VLN              72             789
+-	Habitat	Iterative VLN	181	725360 150.95	Habitat             Multi-stage VLN	216           3260
+
+Table 1. Comparison to VLN benchmarks.
+
+
+and conﬁgurations as the initial resource pool, a custom-designed prompt serves as the input for GPT-4, which com-bines scene details S  and robot conﬁgurations R.   Then
+GPT-4 outputs an instruction list Dins  = G(S,R,prompt1),
+including the sub-task and multi-stage instructions, and G is denoted the GPT-4.  This list is imported into the Habitat3 simulator Sim, where an expert model or a well-trained navigation  model  guides  the  agent  A  through  the  task, which the expert model is a navmesh model and greedy pathﬁnder algorithm built from Habitat [9, 19].  The sim-ulator autonomously generates trajectories Dtraj, the foun-dational data for subsequent splitting into task segments:
+
+Dtraj  = Sim(Dins,S,A,OR(M,E))	(1) where OR represents that either M or E can be used.
+
+3.1.2    Backward Data Generation
+
+After obtaining the trajectory through forward task gener-ation, we decompose the trajectory of complex tasks and create step-by-step VLN tasks for each trajectory segment. The trajectory decomposition algorithm (more detail can be found in the supplementary material) splits complex task trajectories into multiple single-stage navigation task trajec-tories. Within a single-stage navigation goal trajectory, the algorithm divides the trajectory into segments representing “move forward,” “turn left,” “turn right,” and “bypass for-ward.” By using a dynamic sliding window, the algorithm continuously searches for all the longest continuous action segments within the trajectory.   These continuous action segments serve as the basic units of action instructions in step-by-step navigation tasks. For each segment, the RAM image annotation model [44] provides high-conﬁdence vi-sual annotations.   These annotations, coupled with action instructions, are input as prompts into GPT-4 to generate VLN tasks for step-by-step guidance, thereby creating a re-ﬁned set of decomposed single-stage navigation tasks.
+
+3.2. The LHPR-VLN Benchmark
+Our LHPR-VLN benchmark deﬁnes a complex task that in-cludes multiple single-stage subtasks.  For an LHPR-VLN task, the basic format is: “Find something somewhere, and take it to something somewhere, then...”.  Each complex task involves locating an object at a speciﬁed initial location
+
+
+
+
+
+
+
+
+
+
+
+Figure 3.  Overview of the LHPR-VLN benchmark statistics.  In our statistics, Spot and Stretch robot-type tasks account for 50.5% and 49.5%, respectively.  LH-VLN tasks containing 2, 3, and 4 subtasks account for 39.0%, 52.4%, and 8.6%, respectively.
+
+and transporting it to a designated target location, poten-tially encompassing two to four sequential navigation sub-tasks.  The embodied agent needs to sequentially complete these single-stage navigation tasks to ultimately fulﬁll the instruction. For each single-stage navigation task, the agent must approach within a 1-meter geodesic distance of the target object, ensuring the object is positioned within a 60-degree horizontal ﬁeld of view to maintain task ﬁdelity.
+Throughout navigation, the agent acquires observational data from three perspectives (+60◦, 0◦, −60◦) and is per-mitted to execute fundamental actions: turn left, move for-ward, turn right, and stop. When the agent selects the “stop” action, the sub-task is deemed complete, and task success is evaluated based on the agent’s ﬁnal positional state relative to the target. Table 1 presents a comparison between repre-sentative VLN benchmarks, our LHPR-VLN is the ﬁrst LH-VLN benchmark, containing 3,260 multi-stage and step-by-step VLN tasks from 216 complex scenes, with an average of 150 task action steps and 18.17 instruction length.
+
+3.3. Reasonable Metrics
+
+To rigorously assess model performance in the LH-VLN task,  we  introduced  specialized  metrics,  complementing the standard evaluation metrics (Success Rate (SR), Ora-cle Success Rate (OSR), Success weighted by Path Length (SPL), and Navigation Error (NE)). These new metrics in-clude Independent Success Rate (ISR), Conditional Success Rate (CSR), and CSR weighted by Ground Truth (CGT). ISR quantiﬁes the success rate of each sub-task individu-ally, providing insight into independent sub-task comple-
+
+
+
+
+12081
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Figure 4. The framework of the Multi-Granularity Dynamic Memory (MGDM) model. The CoT feedback module receives task instructions and, based on historical observation of corresponding memory, generates a chain of thought and constructs language prompts. The short-term memory module aims to minimize the entropy of the conﬁdence vector, using pooling operations to forget and blur the memory sequence.   The long-term memory module selects and matches data from the dataset to weight the decisions of the LLM, ultimately determining the action to be executed by the agent.
+
+
+tion rates.  CSR evaluates the success of the overall com-plex task, as the outcome of each sub-task impacts the sub-sequent ones, thus encapsulating interdependencies in the task sequence.
+
+ISR = XX    sj,i	(2) j=0 i=0
+N
+M
+M · N
+where M is the numble of tasks, and N is the number of sub-tasks in Taskj. The CSR metric is calculated as follows:
+
+CSR = XX sj,i(1 + (N − 1)sj,i−1)	(3) j=0 i=0
+N
+M
+M · N
+2
+where sj,i denotes the success of the i-th sub-task in Taskj. CGT further reﬁnes CSR by incorporating ground truth
+of  sub-task  path  length  Pi   and  full  task  path  length  P weighting, to account for deviations in path difﬁculty. CGT is calculated as:
+
+CGT = XX Pi  · sj,i(1 + (N − 1)sj,i−1)	(4) j=0 i=0
+N
+M
+P	M · N
+We also designed a metric Target Approach Rate (TAR) based on NE to reﬂect the model’s performance in cases where the navigation success rate is relatively low. The rel-evant settings can be found in the supplementary materials. Furthermore, the multi-granularity task instructions gen-erated by the NavGen platform allow us to test the model’s responsiveness to various instruction types within the same trajectory.    This  testing  approach  not  only  facilitates  an analysis of the agent’s focus during navigation but also en-ables a robust evaluation of task comprehension and execu-tion across complex scenarios through these novel metrics. Thus, these new metrics provide a comprehensive evalua-
+tion of model performance in LH-VLN tasks.
+
+4. Multi-Granularity Dynamic Memory Model
+
+To  achieve  robust  LH-VLN,  our  Multi-Granularity  Dy-namic Memory (MGDM) model follows the general VLN pipeline  and  comprises  three  essential  components:   the base model, the Chain-of-Thought (CoT) Feedback mod-ule, and Adaptive Memory Integration and Update (AMIU), as shown in Fig.  4.  These components enable robust per-formance in LH-VLN, addressing challenges related to spa-tial awareness [25], instruction comprehension [4], and task continuity [13] across long-horizon sequences.
+4.1. Base Model
+The base model aligns with the standard structure of VLN models.  For scene observation, the model encodes multi-directional visual information using a pre-trained visual en-coder vit.   Each observed image Ii  is processed into vi-sual features vi. To integrate scene information across mul-tiple directions, a Transformer encoder is used for multi-
+n
+view feature fusion. The directional image features {vi}i=1
+are processed through the Transformer encoder, resulting in
+n
+contextually enriched representations {oi}i=1  that capture
+inter-relational information across views.
+Each directional view is distinguished by embedding di-rectional tokens (‘left,’ ‘front,’ ‘right’) to construct a com-prehensive scene representation S:
+S = [E(‘left’),oleft,...,E(‘right’),oright]	(5)
+where E denotes the embedding layer. For historical obser-vations Hi, each previous scene is encoded similarly, with stepwise embeddings added to capture temporal relations, establishing sequential order within the observation history:
+
+Hn+1  = [E(1),h1,...,E(n),hn]	(6)
+The scene and historical representations are then combined into a uniﬁed prompt, which is fed into the large language
+
+
+
+
+12082
+
+
+model (LLM) G to select the next action:
+
+an+1  = G(E(prompt3),S,Hn)	(7)
+
+4.2. Navigate with CoT and Memory
+To address the limited interpretability and susceptibility to “hallucinations” [34] in LLM-based VLN models (wherein the agent completes tasks without true comprehension), we introduce a Chain-of-Thought (CoT) [38] Feedback mod-ule that receives task instructions and, based on historical observation of corresponding memory,  generates a chain of thought and constructs language prompts.  This module aims to enhance the agent’s reasoning capability by itera-tively reﬁning its task understanding and action planning.
+CoT Feedback.  At the beginning of each sub-task and periodically during navigation, the CoT Feedback module receives task instructions, current observation, and history visual observations in memory, along with the prompt, are input into GPT-4 to generate the chain of thought CoT = GPT-4(Obs, Hist, Instruction, Prompt).	GPT-4  uses  past observations and task instructions to establish the current task context, which implies comprehensive task understand-ing. The task is then decomposed based on this understand-ing, guiding the agent’s immediate actions.  This reﬂective process enables the agent to adjust and reﬁne its interpreta-tions, improving task comprehension and execution.
+Adaptive Memory Integration and Update.  Previous VLN works often used visual encoding from past observa-tions as memory, which is typically effective.   However, in LH-VLN tasks, the lengthy task duration causes an ex-cessive accumulation of memory, making this approach im-practical. Moreover, existing methods often discard the old-est memories to maintain a ﬁxed-length memory sequence or just discard some memories that the model thinks inap-propriate [2], which inadvertently removes critical informa-tion.  To mitigate these limitations, we design an Adaptive Memory Integration and Update (AMIU) module incorpo-rating short-term memory, long-term memory, and a mem-ory blurring and forgetting process.
+Short-term memory Mst is structured from historical ob-servation encoding, capturing temporally ordered observa-tions as the agent moves through the environment:
+
+Mst  = {hi}i=0	(8)
+n
+
+When the memory length n reaches a set maximum N, dy-namic forgetting is triggered.   Each memory element hi has an associated conﬁdence score ci  = G(·)i, representing the model’s conﬁdence in corresponding action. The mem-ory sequence Mst  thus has an associated conﬁdence vector
+n
+C = {ci}i=o.
+The forgetting module employs a “pooling function” that we deﬁne it as P.  P(C)i  represents the pooling operation with a window size of 2 applied to the ith  element and its
+
+neighboring elements in C, which reduces its length by one:
+
+
+P(C)i  = {c1,...,AvgPool(ci−1,ci,ci+1),...,cn} = Ci (9)
+where Ci  ∈ Rn−1. We apply the pooling operation to each
+n	n
+element in C separately, obtaining {Ci}i=0  = {P(C)i}i=0.
+We then calculate the entropy of each Ci  and identify the pooling index with the smallest entropy:
+
+n−1
+X
+C
+i,
+argmin(−	sj logsj),sj  = Pn−1j	(10)
+C
+i
+j=1	j=0	i,j
+
+The same pooling operation is applied to the Mst  el-ements corresponding to the pooling index and add new short-term memory to maintain the memory sequence.
+
+Mst  = P(Mst)i + hn	(11)
+∗
+
+Long-term memory Mlt serves as a reinforcement mech-anism. As the agent navigates, long-term memory retrieves relevant observations and actions based on target T from the dataset, matching them with the agent’s current observation to provide guidance.  The retrieval process selects the top k matching observation-action pairs, which are weighted to inform the current decision vector. This memory is sourced from the LHPR-VLN dataset, reinforcing prior learning:
+
+Mlt  = Dataset(T) = {obsj,actj}j=1	(12)
+m
+
+Thus, the indices of the selected Mlt can be formulated as:
+Ik  = argsortk     ({q	obsj · v	}m    )  (13)
+p
+P	P
+n	n
+v	v
+2	2
+j=1
+t=0
+i=1 obsj,i ·	i=1 vi
+
+The action decision a is weighted by averaging the retrieved actions:
+k
+a = a · avg({actt}t=0)	(14)
+where a is the current decision vector.   The ﬁnal cross-entropy loss is computed between the model’s decision a and the expert’s decision e at current action:
+
+X
+n
+argminL(a,e) = argmin(−		ai log(ei))	(15) i=0
+Θ	Θ
+5. Experiment
+5.1. Experimental Settings
+Simulator:  We conduct experiments in Habitat3 [9, 19], which provides a continuous 3D scene platform for VLN. Additionally, we perform experiments in Isaac Sim, which has high-quality scene rendering and physical interactions. Sensors: For each action step, the agent receives RGB ob-servations from there directions of front, left (+60°), and
+
+
+
+
+12083
+
+
+Method	Type	SR↑	NE↓
+
+2-3 Subtasks
+ISR↑	CSR↑	CGT↑	SR↑
+
+3-4 Subtasks
+NE↓	ISR↑	CSR↑	CGT↑
+
+
+
+Random
+GLM-4v prompt [7] NaviLLM [45] NaviLLM [45]
+GPT-4 + NaviLLM MGDM (Ours)
+
+-Zero-shot
+Pretrain Finetuned Pretrain Finetuned
+
+0.	14.09	0.	0. 0.	15.63	0.	0. 0.	12.11	0.	0. 0.	12.24	0.	0. 0.	12.23	0.	0. 0.                3.54	0.	0.
+
+0.	0.	10.91	0.	0.	0. 0.	0.	10.97	0.	0.	0. 0.	0.	10.04	0.	0.	0. 0.	0.                9.79              3.54               2.53                5.24 0.	0.	10.00             4.37               2.91                5.23 0.	0.                1.23              4.69               3.30                5.83
+
+Table 2. Performance comparison in LH-VLN Task with different task length.
+
+
+right (-60°).   Depth images for these three directions can also be customized.
+Actions: We provide atomic actions for the agent, including ‘move forward’ (+0.25), ‘turn left’ (+30°), ‘turn right’ (-30°), and ‘stop’. When the agent performs the stop action, the current task (or sub-task) is considered complete.  We also provide a coordinate-based movement option.
+Scene   Assets:	Our   scene   assets   are   primarily   from HM3D [40], which includes 216 large-scale indoor 3D re-constructed scenes with semantic annotations. Besides, we use HSSD [14],  which includes 211 high-quality indoor scenes, to test the data generation with NavGen.
+Robot  Conﬁgurations:   The  robots  include  the  Stretch robot from Hello Robot and the Spot robot from Boston Dy-namics. Stretch has a wheeled base and a manipulator with a structural frame, while Spot is a quadruped robot dog ca-pable of mounting a mechanical arm on its back.
+Training Settings:  We alternately use imitation learning and trajectory-based supervised learning.  The LLM is Vi-cuna 7B v0 [5], and the visual encoder is the ViT model from  EVA-CLIP-02-Large  [32].    The  visual  encoder  re-mains frozen during training. In the training phase, we uti-lize the Adam optimizer with a learning rate of 3e-5. Metrics:  Besides our metrics ISR, CSR , and CGT, we also  used  traditional  metrics  [3],  including  SR  (Success Rate), SPL (Success weighted by Path Length), OSR (Or-acle Success Rate), and NE (Navigation Error).   For SR, OSR and SPL, the task is considered successful only when all sub-tasks in a LH-VLN task are completed correctly in the logical sequence of instructions. For NE, only when the agent takes the action of ‘stop’, the NE counts.
+5.2. Baseline Models
+•  ETPNav [2]: ETPNav is a graph-based navigation model where the agent’s current and historical observations are modeled as graph nodes.
+•  GLM-4v prompt [7]: GLM-4v is a state-of-the-art vision-language model.  To evaluate the performance of vision-language models in LH-VLN tasks, we use prompt engi-neering to guide GLM-4v to produce reasonable outputs and test its actual performance.
+•  NaviLLM [45]:  NaviLLM is the state-of-the-art model for navigation in discrete environments. We adapted this approach to continuous environments and ﬁne-tuned it on the dataset to evaluate its performance in LH-VLN.
+
+•  GPT-4 + NaviLLM: To evaluate the performance of tra-ditional single-stage models in LH-VLN with the assis-tance of a LLM to decompose complex tasks, we com-bined GPT-4 with NaviLLM. GPT-4 ﬁrst decomposes the complex task into several sub-task, and NaviLLM then executes each sub-task sequentially.
+
+5.3. Result Analysis
+We test baseline models on LH-VLN task and its corre-sponding step-by-step trajectories with LHPR-VLN bench-mark. Through these tests, we aim to answer the following questions: Q1: Can existing models understand and com-plete multi-stage complex tasks with limited information? Q2:  How to understand the relations between multi-stage complex tasks and single-stage simple tasks? Q3: What is the signiﬁcance of memory in multi-stage complex tasks?
+RQ1: For ETPNav, due to the inherent limitations of its waypoint predictor, even with only three viewpoint RGBD settings, the model still fails to effectively predict navigable points, despite being designed to handle invalid navigation points and deadlock states. The performance of each model in LH-VLN task is shown in Table 2.  As seen, all models perform poorly. In the relatively short LH-VLN tasks with 2-3 subtasks, the SR, ISR, CSR, and CGT of all models are 0.  This indicates that these models are unable to complete even a single subtask. In the longer LH-VLN tasks with 3-4 subtasks, only ﬁne-tuned NaviLLM, GPT-4+NaviLLM, and our MGDM can complete some subtasks. This suggests that existing models cannot effectively understand and complete multi-stage complex tasks with limited information.
+RQ2: To explore the relation between multi-stage com-plex tasks and single-stage simple tasks, we test the combi-nation of the single-stage navigation model NaviLLM with GPT-4 task decomposition. By using GPT-4 to decompose complex tasks, NaviLLM can sequentially perform several single-object navigation tasks.  In Table 2, it can be seen that the performance of GPT-4+NaviLLM shows some im-provement compared to the pre-trained NaviLLM and ﬁne-tuned NaviLLM, especially in ISR, where it improves by 23% compared to the ﬁne-tuned NaviLLM. This indicates a signiﬁcant performance improvement on individual sub-tasks, highlighting its single-stage navigation ability.
+However,   the  performance  of  the  GPT-4+NaviLLM method is still slightly lower than that of our MGDM, which has been speciﬁcally designed for complex tasks, especially
+
+
+
+
+12084
+
+,QVWUXFWLRQ
+7DNHWKHWRZHO IURPWKHEDWKURRP DQGSODFHLWLQWKHER[ LQWKHOLYLQJURRPWKHQUHWULHYHWKHERRNIURPWKHOLYLQJURRP 						
+
+
+
+
+						
+
+
+
+&RPSOH[/RQJKRUL]RQ9/16FHQH
+Figure 5.   Visualization of a partially successful long-horizon navigation of our MGDM. We highlight aligned landmarks by colored bounding boxes in images and words in the instruction using the same color. In the ﬁrst navigation segment, the agent looks for a towel in the bathroom. It successfully ﬁnds both the bathroom and the towel but does not enter the bathroom or gets close enough to the towel for the task to be marked as successful. In the next phase, the agent successfully ﬁnds the box in the living room.
+
+
+Method	SR↑	OSR↑
+Random	0.	0 GLM-4v prompt [7]	0.                11.1 NaviLLM [45]                      6.67              6.67 MGDM (Ours)	0.               26.92
+
+SPL↑	NE↓
+0.                 8.59 0.                 6.50 2.86             10.17 0.                 1.70
+
+Method	NE↓	ISR↑	CSR↑	CGT↑
+MGDM w/o Adap Mem	4.44	0.	0.	0. MGDM w/o LT Mem                 11.13             2.20               1.27                2.08 MGDM w/o CoT	2.45	0.	0.	0. MGDM	1.23              4.69               3.30                5.83
+
+
+
+Table 3. Performance comparison in step-by-step LH-VLN task.
+
+in CGT. In fact, the CGT metric for GPT-4+NaviLLM is even lower than that of ﬁne-tuned NaviLLM. Since CGT is weighted based on the length of the ground truth, this re-sult suggests that our MGDM is better at completing longer and more difﬁcult subtasks.   The reason may be that our MGDM directly executes complex tasks can maintain more coherent and complete memories, which help it accomplish more complex tasks.  Additionally, the advantage in CSR further indicates that MGDM has a better comprehensive understanding of multi-stage LH-VLN tasks.
+Actually,  combining  task  decomposition  for  complex tasks with single-stage navigation models can improve the performance of single-stage models on complex tasks to some extent.  However, this approach also leads to a lack of holistic understanding of complex tasks, as well as in-complete and fragmented memory.
+RQ3:  Furthermore, all models perform better in ISR, CSR, and CGT on LH-VLN tasks with 3-4 subtasks than on those with 2-3 subtasks. This may be due to the fact that while longer and multi-stage tasks may be more difﬁcult, the memory accumulated from previous stages can help the VLN model complete subtasks in subsequent stages.  This may suggest the signiﬁcance of developing VLN models for multi-stage complex tasks. The tendency of navigation target distribution in the LH-VLN task with different num-bers of subtasks and task settings may also inﬂuence this result.  Relevant details can be found in the supplementary materials.  It is worth noting that our MGDM has a rela-tively low NE. when tasks are so difﬁcult that the model performs poorly, NE reﬂects the gap between the model per-formance and success. This suggests that our MGDM may have greater potential for LH-VLN. Additionally,  in the step-by-step tasks shown in Table 3, although our MGDM has higher OSR and lower NE, its SR and SPL metrics are
+
+Table 4. Ablation results.
+both 0. This indicates that our MGDM faces an issue in ef-fectively determining whether the goal has been achieved.
+
+5.4. Ablation Studies
+We  performed  ablation  studies  on  multi-granularity  dy-namic  memory  module,  long  term  memory  module  and the chain-of-thought (CoT) feedback module, with results shown in Table 4.  As observed, the model’s performance is signiﬁcantly affected whether the CoT feedback module, long term memory module or the multi-granularity dynamic memory module is ablated.  This indicates the crucial role of chain-of-thought generation and memory in the model’s ability to solve LH-VLN tasks.   From the perspective of NE, especially the multi-granularity dynamic memory mod-ule, it has signiﬁcant impact on model’s performance. This is also reﬂected in the visualization analysis of a success-ful long-horizon navigation example (see Figure 5).   The agent’s actions are very chaotic at the beginning (1-3 steps). It only acts effectively once the memory sequence reaches a certain length. This further underscores the importance of memory module design for LH-VLN tasks.
+
+6. Conclusion
+
+We address the challenges of long-horizon vision-language navigation (LH-VLN) from three aspects: platform, bench-mark, and method.  Speciﬁcally, we develop an automated data generation platform NavGen, which constructs datasets with complex task structures and improves data utility. We also construct the LHPR-VLN benchmark, which provides three new metrics for detailed,  sub-task-level evaluation. Additionally, we present the MGDM model, designed to enhance  model  adaptability  in  dynamic  settings  through combined short-term and long-term memory mechanisms, achieving outstanding performance on the LH-VLN task.
+
+
+
+
+12085
+
+
+Acknowledgement
+
+This work is supported in part by the National Key R&D Program of China under Grant No.2021ZD0111601, in part by the National Natural Science Foundation of China un-der Grant No. 62436009, No. 62002395 and No. 62322608, in part by the Guangdong Basic and Applied Basic Re-search  Foundation  under  Grant  NO.  2025A1515011874 and No.2023A1515011530, and in part by the Guangzhou Science  and  Technology  Planning  Project  under  Grant No. 2023A04J2030. We also thank the National Supercom-puter Center in Guangzhou for computational support.
+
+References
+
+[1]  Dong An, Hanqing Wang, Wenguan Wang, Zun Wang, Yan Huang, Keji He, and Liang Wang.  Etpnav: Evolving topo-logical planning for vision-language navigation in continu-ous environments.   IEEE Transactions on Pattern Analysis and Machine Intelligence, 2024. 3
+[2]  Dong An, Hanqing Wang, Wenguan Wang, Zun Wang, Yan Huang, Keji He, and Liang Wang.  Etpnav: Evolving topo-logical planning for vision-language navigation in continu-ous environments.   IEEE Transactions on Pattern Analysis and Machine Intelligence, 2024. 2, 6, 7
+[3]  Peter Anderson, Qi Wu, Damien Teney, Jake Bruce, Mark Johnson, Niko Sunderhauf, Ian Reid, Stephen Gould, and Anton van den Hengel. Vision-and-language navigation: In-terpreting visually-grounded navigation instructions in real environments. In 2018 IEEE/CVF Conference on Computer Vision and Pattern Recognition, 2018. 3, 4, 7
+[4]  Weixing  Chen,  Yang  Liu,   Binglin  Chen,  Jiandong  Su, Yongsen Zheng, and Liang Lin.   Cross-modal causal rela-tion alignment for video question grounding. arXiv preprint arXiv:2503.07635, 2025. 5
+[5]  Wei-Lin Chiang, Zhuohan Li, Zi Lin, Ying Sheng, Zhang-hao Wu, Hao Zhang, Lianmin Zheng, Siyuan Zhuang, Yong-hao Zhuang,  Joseph E. Gonzalez,  Ion Stoica,  and Eric P. Xing.   Vicuna:  An open-source chatbot impressing gpt-4 with 90%* chatgpt quality, 2023. 7
+[6]  Matt Deitke, Dustin Schwenk, Jordi Salvador, Luca Weihs, Oscar  Michel,   Eli  VanderBilt,   Ludwig  Schmidt,   Kiana Ehsani, Aniruddha Kembhavi, and Ali Farhadi.  Objaverse: A  universe  of  annotated  3d  objects.	In  Proceedings  of the IEEE/CVF Conference on Computer Vision and Pattern Recognition, pages 13142–13153, 2023. 2
+[7]  Team GLM, Aohan Zeng, Bin Xu, and Zihan Wang.  Chat-glm:  A family of large language models from glm-130b to glm-4 all tools, 2024. 7, 8
+[8]  Jing Gu, Eliana Stefani, Qi Wu, Jesse Thomason, and Xin Wang.  Vision-and-language navigation: A survey of tasks, methods, and future directions.  In Proceedings of the 60th Annual Meeting of the Association for Computational Lin-guistics (Volume 1: Long Papers), pages 7606–7623, 2022. 2
+[9]  Saurabh Gupta, James Davidson, Sergey Levine, Rahul Suk-thankar, and Jitendra Malik.  Cognitive mapping and plan-
+
+
+ning for visual navigation. In Proceedings of the IEEE Con-ference on Computer Vision and Pattern Recognition, 2017. 4, 6
+[10]  Yicong Hong, Zun Wang, Qi Wu, and Stephen Gould. Bridg-ing the gap between learning in discrete and continuous en-vironments for vision-and-language navigation. In Proceed-ings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition, pages 15439–15449, 2022. 3
+[11]  Yining Hong, Zishuo Zheng, Peihao Chen, Yian Wang, Jun-yan Li, and Chuang Gan.  Multiply: A multisensory object-centric embodied large language model in 3d world. In Pro-ceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition, pages 26406–26416, 2024. 3
+[12]  Vihan  Jain,   Gabriel  Magalhaes,   Alexander  Ku,   Ashish Vaswani, Eugene Ie, and Jason Baldridge. Stay on the path: Instruction ﬁdelity in vision-and-language navigation. arXiv preprint arXiv:1905.12255, 2019. 3
+[13]  Kaixuan Jiang, Yang Liu, Weixing Chen, Jingzhou Luo, Zil-iang  Chen,  Ling  Pan,  Guanbin  Li,  and  Liang  Lin.    Be-yond the destination:  A novel benchmark for exploration-aware   embodied   question   answering.	arXiv   preprint arXiv:2503.11117, 2025. 5
+[14]  Mukul  Khanna,   Yongsen  Mao,   Hanxiao  Jiang,   Sanjay Haresh, Brennan Shacklett, Dhruv Batra, Alexander Clegg, Eric  Undersander,  Angel  X.  Chang,  and  Manolis  Savva. Habitat synthetic scenes dataset (hssd-200): An analysis of 3d scene scale and realism tradeoffs for objectgoal naviga-tion. In 2024 IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR), pages 16384–16393, 2024. 7
+[15]  Mukul Khanna*, Ram Ramrakhya*, Gunjan Chhablani, Sri-ram Yenamandra, Theophile Gervet, Matthew Chang, Zsolt Kira, Devendra Singh Chaplot, Dhruv Batra, and Roozbeh Mottaghi.  Goat-bench: A benchmark for multi-modal life-long navigation. In CVPR, 2024. 3, 4
+[16]  Eric Kolve, Roozbeh Mottaghi, Winson Han, Eli VanderBilt, Luca Weihs,  Alvaro Herrasti,  Matt Deitke,  Kiana Ehsani, Daniel Gordon, Yuke Zhu, et al. Ai2-thor: An interactive 3d environment for visual ai. arXiv preprint arXiv:1712.05474, 2017. 2
+[17]  Jacob Krantz, Erik Wijmans, Arjun Majumdar, Dhruv Batra, and Stefan Lee. Beyond the nav-graph: Vision-and-language navigation in continuous environments.    In Computer Vi-sion – ECCV 2020,Lecture Notes in Computer Science, page 104–120, 2020. 2, 3, 4
+[18]  Jacob Krantz, Shurjo Banerjee, Wang Zhu, Jason Corso, Pe-ter Anderson, Stefan Lee, and Jesse Thomason.   Iterative vision-and-language navigation. In 2023 IEEE/CVF Confer-ence on Computer Vision and Pattern Recognition (CVPR), pages 14921–14930, 2023. 3, 4
+[19]  Ashish  Kumar,   Saurabh  Gupta,   David  Fouhey,   Sergey Levine, and Jitendra Malik.  Visual memory for robust path following.   In Advances in Neural Information Processing Systems, 2018. 4, 6
+[20]  Chengshu Li, Ruohan Zhan, Josiah Wong, and Li Fei-Fei. Behavior-1k:  A human-centered,  embodied ai benchmark with 1,000 everyday activities and realistic simulation.   In Conference on Robot Learning (CoRL) 2022, 2022. 2, 3, 4
+
+
+
+
+12086
+
+
+[21]  Kunchang Li, Yali Wang, Yinan He, Yizhuo Li, Yi Wang, Yi Liu, Zun Wang, Jilan Xu, Guo Chen, Ping Luo, et al. Mvbench: A comprehensive multi-modal video understand-ing benchmark. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition, pages 22195– 22206, 2024. 2
+[22]  Rui Liu, Wenguan Wang, and Yi Yang. Volumetric environ-ment representation for vision-language navigation. In Pro-ceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition, pages 16317–16328, 2024. 3
+[23]  Yang  Liu,  Weixing  Chen,  Yongjie  Bai,  Xiaodan  Liang, Guanbin Li, Wen Gao, and Liang Lin. Aligning cyber space with physical world: A comprehensive survey on embodied ai. arXiv preprint arXiv:2407.06886, 2024. 2
+[24]  Yuxing Long, Wenzhe Cai, Hongcheng Wang, Guanqi Zhan, and Hao Dong.   Instructnav:  Zero-shot system for generic instruction  navigation  in  unexplored  environment.    arXiv preprint arXiv:2406.04882, 2024. 2
+[25]  Jingzhou Luo, Yang Liu, Weixing Chen, Zhen Li, Yaowei Wang,  Guanbin Li,  and Liang Lin.   Dspnet:  Dual-vision scene perception for robust 3d question answering.   arXiv preprint arXiv:2503.03190, 2025. 5
+[26]  So  Yeon  Min,  Devendra  Singh  Chaplot,  Pradeep  Kumar Ravikumar, Yonatan Bisk, and Ruslan Salakhutdinov. Film: Following instructions in language with modular methods. In International Conference on Learning Representations. 3
+[27]  Utkarsh Aashu Mishra, Shangjie Xue, Yongxin Chen, and Danfei Xu.   Generative skill chaining:  Long-horizon skill planning with diffusion models.   In Conference on Robot Learning, pages 2905–2925. PMLR, 2023. 2
+[28]  Yuankai   Qi,    Qi   Wu,    Peter   Anderson,    Xin   Wang, William Yang Wang,  Chunhua Shen,  and Anton van den Hengel. Reverie: Remote embodied visual referring expres-sion in real indoor environments. In 2020 IEEE/CVF Confer-ence on Computer Vision and Pattern Recognition (CVPR), 2020. 3, 4
+[29]  Manolis Savva,  Abhishek Kadian,  Oleksandr Maksymets, Yili Zhao, Erik Wijmans, Bhavana Jain, Julian Straub, Jia Liu,  Vladlen  Koltun,  Jitendra  Malik,  et  al.    Habitat:   A platform  for  embodied  ai  research.	In  Proceedings  of the IEEE/CVF international conference on computer vision, pages 9339–9347, 2019. 2
+[30]  Pierre Sermanet,  Tianli Ding,  Jeffrey Zhao,  Fei Xia,  De-bidatta Dwibedi, Keerthana Gopalakrishnan, Christine Chan, Gabriel Dulac-Arnold, Sharath Maddineni, Nikhil J Joshi, et  al.    Robovqa:   Multimodal  long-horizon  reasoning  for robotics.	In  2024  IEEE  International  Conference  on Robotics  and  Automation  (ICRA),  pages  645–652.  IEEE, 2024. 2
+[31]  Chan Hee Song, Jiaman Wu, Clayton Washington, Brian M Sadler, Wei-Lun Chao, and Yu Su.  Llm-planner: Few-shot grounded planning for embodied agents with large language models. In Proceedings of the IEEE/CVF International Con-ference on Computer Vision, pages 2998–3009, 2023. 2
+[32]  Quan Sun, Yuxin Fang, Ledell Wu, Xinlong Wang, and Yue Cao. Eva-clip: Improved training techniques for clip at scale. arXiv preprint arXiv:2303.15389, 2023. 7
+
+[33]  Jesse Thomason, Michael Murray, Maya Cakmak, and Luke Zettlemoyer.  Vision-and-dialog navigation.  In Conference on Robot Learning, pages 394–406. PMLR, 2020. 3
+[34]  Maya Varma, Jean-Benoit Delbrouck, Zhihong Chen, Ak-shay Chaudhari, and Curtis Langlotz.   Ravl:  Discovering and  mitigating  spurious  correlations  in  ﬁne-tuned  vision-language models.   arXiv preprint arXiv:2411.04097, 2024. 6
+[35]  Xiangyu Wang, Donglin Yang, Ziqin Wang, Hohin Kwan, Jinyu  Chen,  Wenjun  Wu,  Hongsheng  Li,  Yue  Liao,  and Si Liu.   Towards realistic uav vision-language navigation: Platform,  benchmark,  and  methodology.	arXiv  preprint arXiv:2410.07087, 2024. 2
+[36]  Yufei Wang,  Zhou Xian,  Feng Chen,  Tsun-Hsuan Wang, Yian Wang, Katerina Fragkiadaki, Zackory Erickson, David Held, and Chuang Gan. Robogen: Towards unleashing inﬁ-nite data for automated robot learning via generative simula-tion. arXiv preprint arXiv:2311.01455, 2023. 2
+[37]  Zihan Wang, Xiangyang Li, Jiahao Yang, Yeqi Liu, Junjie Hu, Ming Jiang, and Shuqiang Jiang. Lookahead exploration with neural radiance representation for continuous vision-language navigation. In Proceedings of the IEEE/CVF Con-ference on Computer Vision and Pattern Recognition, pages 13753–13762, 2024. 3
+[38]  Jason  Wei,   Xuezhi  Wang,   Dale  Schuurmans,   Maarten Bosma, Fei Xia, Ed Chi, Quoc V Le, Denny Zhou, et al. Chain-of-thought prompting elicits reasoning in large lan-guage models.  Advances in neural information processing systems, 35:24824–24837, 2022. 6
+[39]  Zhenyu Wu, Ziwei Wang, Xiuwei Xu, Jiwen Lu, and Haibin Yan.  Embodied instruction following in unknown environ-ments. arXiv preprint arXiv:2406.11818, 2024. 2
+[40]  Karmesh Yadav, Ram Ramrakhya, Santhosh Kumar Ramakr-ishnan, Theo Gervet, John Turner, Aaron Gokaslan, Noah Maestre, Angel Xuan Chang, Dhruv Batra, Manolis Savva, et al.  Habitat-matterport 3d semantics dataset.  In Proceed-ings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition, pages 4927–4936, 2023. 3, 7
+[41]  Yue Yang, Fan-Yun Sun, Luca Weihs, Eli VanderBilt, Al-varo Herrasti, Winson Han, Jiajun Wu, Nick Haber, Ranjay Krishna, Lingjie Liu, et al. Holodeck: Language guided gen-eration of 3d embodied ai environments.  In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition, pages 16227–16237, 2024. 2
+[42]  Sriram Yenamandra, Arun Ramachandran, Karmesh Yadav, Austin Wang, Mukul Khanna, Theophile Gervet, Tsung-Yen Yang,  Vidhi  Jain,  AlexanderWilliam  Clegg,  John  Turner, Zsolt Kira,  Manolis Savva,  Angel Chang,  DevendraSingh Chaplot, Dhruv Batra, Roozbeh Mottaghi, Yonatan Bisk, and Chris Paxton. Homerobot: Open-vocabulary mobile manip-ulation. arXiv:2306.11565, 2023. 3
+[43]  Jiazhao Zhang, Kunyu Wang, Rongtao Xu, Gengze Zhou, Yicong Hong,  Xiaomeng Fang,  Qi Wu,  Zhizheng Zhang, and  He  Wang.    Navid:   Video-based  vlm  plans  the  next step  for  vision-and-language  navigation.	arXiv  preprint arXiv:2402.15852, 2024. 3
+[44]  Youcai  Zhang,  Xinyu  Huang,  Jinyu  Ma,  Zhaoyang  Li, Zhaochuan  Luo,  Yanchun  Xie,  Yuzhuo  Qin,  Tong  Luo,
+
+
+
+
+12087
+
+Yaqian Li, Shilong Liu, et al. Recognize anything: A strong image tagging model. In Proceedings of the IEEE/CVF Con-ference on Computer Vision and Pattern Recognition, pages 1724–1732, 2024. 4
+[45]  Duo Zheng, Shijia Huang, Lin Zhao, Yiwu Zhong, and Li-wei Wang.  Towards learning a generalist model for embod-ied navigation. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition, pages 13624– 13634, 2024. 3, 7, 8
+[46]  Ge Zheng, Bin Yang, Jiajin Tang, Hong-Yu Zhou, and Sibei Yang.  Ddcot: Duty-distinct chain-of-thought prompting for multimodal reasoning in language models. Advances in Neu-ral Information Processing Systems, 36:5168–5191, 2023. 2
+[47]  Gengze Zhou, Yicong Hong, Zun Wang, Xin Eric Wang, and Qi Wu. Navgpt-2: Unleashing navigational reasoning capa-bility for large vision-language models.  In European Con-ference on Computer Vision, pages 260–278. Springer, 2025. 2
+[48]  Fengda  Zhu,  Xiwen  Liang,  Yi  Zhu,  Qizhi  Yu,  Xiaojun Chang, and Xiaodan Liang.  Soon: Scenario oriented object navigation with graph-based exploration. In 2021 IEEE/CVF Conference  on  Computer  Vision  and  Pattern  Recognition (CVPR), 2021. 2, 3, 4
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+12088

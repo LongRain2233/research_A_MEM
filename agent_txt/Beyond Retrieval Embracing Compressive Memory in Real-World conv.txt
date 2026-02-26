@@ -1,0 +1,996 @@
+﻿
+Beyond Retrieval: Embracing Compressive Memory in Real-World Long-Term Conversations
+
+Nuo Chen♣	Hongguang Li♠♦	Jianhui Chang♡ Juhua Huang♠	Baoyuan Wang♢∗	Jia Li♣∗
+
+♣Hong Kong University of Science and Technology (Guangzhou) ♠Xiaobing.ai, ♦JF SmartInvest Holdings, ♢Zillow Group ♡China Telecom Cloud Computing Research Institute chennuo26@gmail.com, jialee@ust.hk
+
+Abstract	snippets, contextual nuances, and user preferences,
+which are crucial for maintaining coherence and
+significant  strides  in  maintaininghlong-term               relevance in ongoing interactions (Wu et al., 2022; conversations.    However,  these  approaches                   To acquire useful information from past conver-
+Existing retrieval-based methods   ave made
+Zhang et al., 2022).
+face challenges in memory database manage-
+ment and accurate memory retrieval, hindering	sations, the most mainstream approach in the field
+their efficacy in dynamic, real-world interac-	of long-term conversation currently is retrieval-tions. This study introduces a novel framework,	based methods, as illustrated in Figure 1 (a): Firstly, COmpressive  Memory-Enhanced  Dialogue	previous works (Xu et al., 2022b; Bae et al., 2022)
+sYstems (COMEDY), which eschews traditional	usually employ a memory generator to summa-
+retrieval modules and memory databases. In-	rize relevant memories from past sessions, such as user portraits; Subsequently, a dedicated memory database, or a memory bank, is used to store these
+stead, COMEDY adopts a “One-for-All” approach,
+utilizing a single language model to manage
+memory generation, compression, and response
+generation.  Central to this framework is the	memories. Some studies (Zhong et al., 2023b) even
+concept of compressive memory, which inte-              store past conversational utterances directly in the grates session-specific summaries, user-bot dy-              storage; Going a step further, some works (Bae
+namics, and past events into a concise mem-	et al., 2022; Wang et al., 2023b) propose the use
+ory format. To support COMEDY, we collect the
+of specific memory management operations to up-
+biggest Chinese long-term conversation dataset,              date and iterate the memory database; The final and actions. Comparative evaluations demonstrate               indispensable step involves employing a sentence-
+Dolphin, derived from real user-chatbot inter-
+embedding model (Guu et al., 2020; Lewis et al.,
+COMEDY’s superiority over traditional retrieval-
+based methods in producing more nuanced and               2020) to retrieve the most relevant memories from human-like conversational experiences.                           the memory database in relation to the current con-
+versation.  The current conversation and related 1	Introduction	memories are then inputted into a specialized re-Maintaining long-term conversations has always	spDespite the notable success achieved by retrieval-
+onse generator to produce the final response.
+been  a  long-standing  pursuit  in  current  open-
+domain dialogue systems (Liu et al., 2016; Zhang
+et al., 2018; Kann et al., 2022), commonly known
+based methods, they encounter several limitations that impact their overall efficacy and applicability:
+as chatbots or conversational agents.  Long-term	1) One significant challenge is the unpredictabil-conversation refers to the ability of a conversational
+ity of the performance.   The system’s effective-
+ness is contingent upon several modules (like mem-
+ory generator and retriever) working in tandem;
+moreover, the retriever component does not guar-
+agent to engage in extended dialogues over multiple interactions, often spanning several days, weeks, or
+even months. This setting is challenging because	antee the retrieval of relevant and effective memo-the immediate dialogue context but also the reten-	ries. Sentence-embedding models (Gao et al., 2021; tion and integration of key information from past
+it necessitates not only a deep understanding of
+Reimers and Gurevych, 2019), commonly used for
+this purpose, may not always capture the nuances
+interactions. Effective long-term conversation re-	and context of the conversation accurately. 2) An-other clear challenge lies in the management of the
+quires a system to memorize or recall past dialogue
+∗Corresponding author.		memory database.  As conversations accumulate, 755
+
+Proceedings of the 31st International Conference on Computational Linguistics, pages 755–773
+January 19–24, 2025. ©2025 Association for Computational Linguistics
+
+
+Past Sessions
+
+…
+
+
+Memory Management
+
+Step-3	- Update - Ignore
+
+
+(a) Retrieval-based Methods
+Memory 1  2
+Memory
+
+
+
+
+Step-1
+Memory Generator	Step-2	Step-4
+
+Response Generator
+Step-5	Response
+
+Database	Retriever
+Current Session
+
+Past Sessions
+
+Session-level Memories
+
+
+Compressive Memory	(b) Ours
+
+
+
+…
+
+Step-1
+COMEDY
+
+
+Event
+EUser Portrait User Portrait
+Bot Portrait
+vent
+Bot Portrait
+
+Concise Events User Portrait
+Step-2		User-Bot Relations COMEDY
+
+
+
+Step-3
+COMEDY
+
+
+
+Response
+
+
+Figure 1: The overview of (a) the retrieval-based methods and (b) ours: COMEDY.
+
+the size and complexity of the memory database      passing fine-grained session summaries, including grow, making it increasingly difficult to manage.      event recaps, and detailed user and bot portraits; In Ensuring that the stored information remains rele-      a break from traditional systems, COMEDY eschews vant and up-to-date is a constant concern, as out-      the use of a memory database for storing these dated or irrelevant data can lead to inaccurate or      insights.   Instead, it reprocesses and condenses inappropriate responses.                                                   memories from all past interactions,  forming a Moreover, current training corpus of long-term      compressive memory,  including concise events, conversation chatbots is commonly either involved      a detailed user profile and dynamic relationship in constructing personalized dialogue data using      changes between the user and chatbot across past LLMs (Wang et al., 2023a) like ChatGPT or hiring      sessions. This holistic memory allows COMEDY to crowd-workers to simulate conversations (Xu et al.,      generate responses that are not only contextually 2022b). Unlike these structured or predictable di-      aware but also personalized and adaptive to the
+alogues, real-world conversations can veer into a	evolving nature of the user-chatbot relationship; Fi-wide range of topics, include colloquial language,	nally, COMEDY skillfully integrates this compressive and incorporate nuanced expressions (Chen et al.,	memory into ongoing conversations, enabling con-2023a). Ensuring that a retrieval model is robust	textually memory-enhanced interactions. Unlike enough to handle such real-world variations in lan-	retrieval-based systems that may struggle to fetch guage can be extremely difficult. Meanwhile, the	pertinent memories from a vast database, COMEDY’s memory database in real scenarios needs to store	compressive memory is inherently designed to pri-memories from multiple chatbot-users,  increas-	oritize salient information, allowing for quicker ing the difficulty in accurately retrieving relevant	and more accurate memory utilization.
+memories and maintaining an up-to-date memory           To ensure that COMEDY is well-suited for real-database.  The above issues present a more pro-     world long-term conversations and overcome the nounced challenge for deploying retrieval-based      issues of lacking relevant labeled data, we have methods in real-world conversations.                             methodically assembled a large-scale instruction-
+To address these concerns, we propose a LLM-	tuning dataset from actual online user-chatbot in-based COmpressive Memory-Enhanced Dialogue	teractions,  named  Dolphin.	This  dataset  con-sYstem (COMEDY). COMEDY marks a significant de-	tains three tasks:  Session-Level Memory Sum-parture  from  existing  methodologies,  as  it  op-	marization;  Memory Compression;  Memory-erates without a retrieval module.   At its core,	Grounded Response Generation, comprising an COMEDY adopts a groundbreaking “One-for-All” ap-	extensive collection of 100k samples. Dolphin is proach, utilizing a single, unified model to manage	well-annotated to support each critical phase in the entire process from memory generation, com-	COMEDY’s operation, from memory extraction and pression to final response generation, as shown in	compression to integration and response generation. Figure 1 (b): It firstly involves distilling session-	This dataset lays a robust foundation for enhancing specific  memory  from  past  dialogues,  encom-	COMEDY’s dialogue capabilities, ultimately leading
+756
+
+to a more nuanced and human-like conversational      etc; and concise record of all events (Task 2). Fi-experience compared to retrieval-based baselines.       nally, M(θ) generates the forthcoming response
+Our contributions are summarized as follows:          ct+1, based on the current dialogue context Dt and M (Task 3). In the following, we introduce how
+ˆ
+• We  introduce  a  new  framework,   named	we annotate the labeled data for each task.
+COMEDY,  represents  a  groundbreaking  shift
+from traditional memory retrieval-based dia-	2.2	Task and Datasets Collection
+logue systems. It does not rely on any retriever      The source data in Dolphin originates from X Eva1, module or memory database, but generates      one of the most popular Chinese AI-User social enhanced, memory-informed responses with      media platforms akin to Character.AI. A distinctive compressive memory.                                               feature of Dolphin is that the AI characters within X Eva are defined by the users themselves.  This
+• We annotate a large-scale (100k) long-term
+conversation instruction tuning dataset, Dol-
+means that each character can have unique person-phin, from actual online user-chatbot interac-	alities, backgrounds, and conversational traits, as tions. It can strengthen compressive memory-          In the creation of the Dolphin dataset for COMEDY, ing conversational styles and user preferences.	we first select the episode D that contains at least To the best knowledge of ours, Dolphin is the	ters as our source dialogue data after filtering out
+determined by the user’s input and creativity.
+augmented models’ ability to adapt to evolv-
+15 sessions between the same user and AI charac-
+current biggest Chinese long-term memory
+conversation dataset.
+useless and toxic information. Then we adopt an ef-ficient LLM-Human Annotators hybrid approach to annotate each task data (Chen et al., 2023d): (1) We initiate the dataset annotation using GPT4-Turbo, specifically tailored for dialogue summaries and memory-grounded dialogues. This step is cru-cial for creating a comprehensive base of dialogues, encompassing a wide range of conversational sce-narios and memory contexts; (2) Following the initial generation, three skilled annotators metic-ulously review and refine the data. This involves
+•  COMEDY could handle the whole long-term con-
+versation interactions via a singular model,
+achieving a higher degree of result consis-
+tency and predictability, reducing computa-
+tional overhead, and eliminating the need for
+data transfer between multi-models.
+2	Methodology
+In this section, we first overview the problem for-	correcting inaccuracies, enhancing dialogue qual-mulation of long-term conversations in COMEDY-	ity. The annotators play a vital role in bridging the style.  Then, we introduce three task definitions	gap between automated generation and the nuanced and detailed data collection in Dolphin. Last, we	understanding required for high-quality COMEDY. present the training strategies of COMEDY.                           To protect user privacy, all personal identifiers
+are removed from the dataset. This includes names, locations, or any specific details that could lead to
+2.1	Problem Formulation
+An episode D (D1,..,Dt−1) is composed of a se-	the identification of individuals. Relevant details quence of previous dialogue sessions between the	are presented in Appendix B.
+chatbot and a specific user. The dialogue context
+Task 1: Session-Level Memory Summarization.
+for a given session at time step t is represented	In the process of gathering data for Task 1, we
+as D  = {c ,u ,c ,u ,...,c ,u }, where c and u
+denote the chatbot’s and user’s utterances.
+In COMEDY, we aims to train a well-performed
+t	1	1	2	2	t	t	encounter a substantial challenge. The initial col-lection yielded over 500,000 session-level data
+model M(θ), that first extracts session-level mem-	points, making it impractical to annotate all of them
+through GPT4-Turbo and manual methods due to
+ory derived from previous sessions within D, de-	the sheer volume.  To tackle this, we initially fo-
+noted  as  M   =  {m ,m ,...,m	}  (Task  1).
+Each m contains natural sentences about session-
+1	2	t−1	cus on annotating a subset of approximately 40,000 level events and user profiles.  Then M(θ) will	data: For each dialogue session in the same episode memory as ithattcontains detailedeuser portraits	session-level memories, including the event, user like characteristics, recent states (emotional, work),           1https://xeva-h5.xiaoice.com/Content/Landing
+D,  we first require the GPT4-Turbo to extract
+takes M	npu s, and outputs th   compressive
+ˆ
+M
+757
+
+
+Statistics
+
+Avg. Turns Per Session
+Avg. sentences Per Session-level Memory Avg. words Per Turn
+Avg. words Per Compressive Memory
+Total AI Characters
+Total Sessions/Compressive Memories Total Turns
+
+Train Task 1	Task2
+13.0              -5.7               -15.9              -
+-	240.7
+3,998         3,998 39,999      30,695
+459,511	-
+
+
+Task 3
+13.9 -19.5 -
+3,998 31,131 432,721
+
+Test
+Task 1	Task2	Task 3
+19.5            -              10 5.3              -                -
+20.7            -            16.3 -           276.8           -
+31             31             31 465            31            127 14,415          -           3,937
+
+
+Table 1: Data statistics for each task in Dolphin. In practice, the amount of collected Task 1 data is much larger than Task 2 and 3. To keep the training balance of data distribution, we align the similar volume of data in three tasks.
+
+and bot portraits in natural sentences. Then annota-	quent stages of COMEDY’s development. We show tors edit the generated summaries by adding miss-	examples of M in Table 10.
+ˆ
+ing information or revising erroneous sentences, resulting in session-level memory mn.  Utilizing
+Task 3: Memory-Grounded Response Genera-
+ˆ
+tion.	Similarly, given compressive memory M
+the annotated subset, we then develop a special-	and incoming conversation Dt, GPT4-Turbo out-efficiently expanding our dataset while maintain-	puts the memory-based responses. Annotators then ing the quality and consistency of the session-level
+ized LLM for session-level memory generation,
+review and refine these responses, focusing on as-
+pects like relevance, coherence, and personaliza-
+tion.  They ensure that each annotated response
+memory annotations across the larger dataset. Sam-
+ples with no informative content, leading to ineffec-      ct+1 accurately reflects the user’s current state and are filtered out to maintain data quality.  As a re-      previous interactions, maintaining high memorabil-
+tive memory outputs from LLM or GPT4-Turbo,
+ity and engagingness.  To ensure the scale of the
+sult, in this task, we collect fine-grained memories	training data, we annotate all sessions within one
+M = {m ,m ,...,m  } for each session in D.
+1	2	n	day closest to the previous D timing as the corpus Task 2: Memory Compression.    In this task, the	of Task 3.
+focus is on memory compression.  GPT4-Turbo
+Test  Set.	To  assess  the  effectiveness  of  the
+is tasked with summarizing all session-level mem-	COMEDY, we well-design a test set that mirrors real-compressive memory  ˆ . It includes: 1) A Com-	world dialogue scenarios as closely as possible: prehensive User Profile: Detailing characteristics,           • We select dialogue data from the X Eva plat-behavioral patterns, and recent states of the user. 2)               form, specifically targeting conversations that Evolving Dynamics between User and Bot: Cap-              involved the same AI-User pair engaging in turing the relationship’s progression and interac-              over 16 sessions within a week.  This crite-tion nuances.  3) Concise Record of Past Events:               rion ensures that the dialogues have sufficient Summarizing key happenings and dialogues from               depth and continuity, which are crucial for previous sessions. Considering the potential com-              testing memory-enhanced dialogue systems. plexity and variance in the summarization process,
+ory M in the episode from Task 1, outputting the
+M
+•
+The first 15 sessions from these selected di-
+alogues serve as the basis for generating the
+compressive memory, aligning with the objec-
+tives of Task 1 and 2 in our dataset.
+GPT4-Turbo is configured to generate outputs three times with a temperature setting of 0.9. This setting allows for a balance between creativity and rele-vance, enabling GPT4-Turbo to produce diverse and insightful summaries. Then annotators step in to refine and calibrate the outputs, which includes: Correcting any inaccuracies or inconsistencies in the summaries; Ensuring that the summarized data accurately reflects the user profiles, relationship
+• The subsequent 1-5 sessions are then used as
+test scenarios to evaluate how well the model
+integrates the compressive memory into on-
+going dialogues (Task 3).   This provides a
+practical testbed for assessing the system’s
+and conciseness where necessary. Thisihybrid ap-	conversational abilities in an evolving context.
+dynamics, and event records; Enhanc ng clarity
+proach ensures that compressive memory  ˆ meets      Quality Control.    Ensuring high-quality data is the high-quality standards required for the subse-      paramount for the accuracy, reliability, and over-758
+M
+
+
+all performance of the system.  In this work, we employ several strategies to control data quality:
+
+• Annotator Performance Monitoring: Regular assessments of annotator performance are con-ducted to ensure consistent quality across the team (every day).  This includes evaluating their accuracy, attention to detail, and adher-ence to annotation guidelines.
+
+
+Model	BLEU-1/2	F1	Distinct-1/2
+Task 1
+COMEDY-7B        41.4 / 34.2      35.4         4.2/35.0 COMEDY-13B     43.0 / 35.0      36.7         3.9/34.3
+Task 2
+COMEDY-7B        42.7 / 34.6      36.3         4.1/34.4 COMEDY-13B     43.7 / 35.7      37.0         4.1/35.2
+
+
+Table 2: The performances of COMEDY in Task 1 and 2.
+
+
+•  Peer Review and Validation:  Following the	DPO Training	Experimentally, we find that the initial review, a secondary level of peer review	SFT model may struggle with maintaining consis-is implemented. Here, another set of annota-	tency and coherence in generated memories.  In tors cross-checks the work, providing an addi-	order to align the model generating more con-tional layer of scrutiny. This peer review pro-	textually appropriate memory-grounded responses, cess helps in catching errors that might have	we employ Direct Preference Optimization (DPO) been overlooked initially, ensuring a higher	(Rafailov et al., 2023) strategy in Task 3.  DPO standard of data quality.	aims to distill a referential SFT policy M(θ)sft by
+polarizing the preference.  By polarizing the pre-Note, we also manually annotate the session-	ferred responses (aligned with memory) and dispre-
+level memory and the resulting compressive mem-      ferred responses (against memory), DPO ensures ory in the first 15 sessions. They are used to evalu-      that the generated outputs remain consistent with ate the model’s performance in Task 1 and 2. Our      the user’s past interactions and the overall context prompts and examples of each task are shown in      of the conversation. Specifically, DPO involves in-Appendix E, Table 7-10.                                                   put labeled pairs (Yw,Yl) where Yw and Yl denotes Statistics.    As a result, the statistics of our dataset      the preferred and dispreferred completion. When
+extended DPO in Memory-grounded generation,
+the question is: how we obtain the Y   and Y ?
+are shown in Table 1. Dolphin comprises a total of
+102,882 samples in training and test sets. Tasks 1	w	l
+and 2 (Memory Extraction and Compression) con-	To solve this, we propose a simple strategy to tain 39,999 and 30,695 samples in training, respec-      automatically construct useful Yw and Yl responses tively, making up a significant portion of the dataset.     without human annotation.  Suppose M  and Dt Task 3, which involves generating responses based      are given, we ask the GPT4-Turbo to generate the on the compressive memory, comprises 31,131 di-      response Yw  must align the M.  Meanwhile, we alogue sessions. A notable feature of the Dolphin      also require GPT4-Turbo to generate the response dataset is its inclusion of data from 3,998 different      Yl that is totally against the M. For example, the AI characters. The diverse character data ensures      prompts are illustrated like: “If M shows users like that COMEDY is well-equipped to interact with vari-      something, you should generate the response with ous user personalities and preferences, enhancing      the meaning of users hate it...”, shown in Table 6.
+ˆ
+ˆ
+ˆ
+ˆ
+its adaptability and realism in user interactions.           Formally, the training objective of DPO is: LDPO(M(θ);M(θ)sft) = −E(x,Yw,Yl)∼D
+h	
+logσ   β log	− β log
+i
+2.3	COMEDY
+M(θ)(Yw|x)	M(θ)(Yl|x) SFT Training	In practice, we adopt a mixed-	M(θ)sft(Yw|x)                      M(θ)sft(Yl|x) task training approach to develop COMEDY. This in-          where x is the concatenation of M and Dt, β volves simultaneously training the model on the      is a hyperparameter.  Training instructions are in three tasks - session-level memory summarization,      Appendix E.
+ˆ
+memory compression, and memory-grounded re-sponse generation - present in the Dolphin dataset. This integration presents the model with a holistic view of the conversation process, from initial mem-
+3	Experiments
+ory extraction to final response generation.  We      In this section, we introduce the evaluation setting utilize the common language modeling objective      including experimental setup, baselines, evaluation in SFT, terming the resulting model as M(θ)sft.          metrics, and present main results and discussions. 759
+
+
+Algorithms
+Context-Only LLaMA 2-7B LLaMA 2-13B ChatGPT (8k token)
+Retrieval-based ChatGPT LLaMA 2-13B LLaMA 2-7B GPT4
+Memory-related MemoryBank-ChatGPT Resum-ChatGPT
+COMEDY-ChatGPT COMEDY-7B COMEDY-13B COMEDY-13B DPO COMEDY-GPT4
+
+Coherence
+
+1.01 0.93 1.30
+
+1.22 1.73 1.70 1.91
+
+1.25 1.31
+1.19 1.67 1.81 1.79 1.96
+
+Consistency
+
+0.50 0.66 0.89
+
+0.86 0.98 0.94 0.94
+
+0.94 0.97
+1.07 1.11 1.07 1.20 1.14
+
+Memorability
+
+0.11 0.19 0.49
+
+0.37 0.51 0.54 0.60
+
+0.42 0.47
+0.60 0.60 0.70 0.80 0.70
+
+Engagingness
+
+0.31 0.37 0.29
+
+0.43 0.24 0.31 0.52
+
+0.45 0.44
+0.46 0.39 0.51 0.46 0.73
+
+Humanness
+
+1.71 1.76 1.54
+
+1.51 1.85 1.91 1.69
+
+1.52 1.49
+1.62 1.85 1.94 2.09 1.85
+
+Average
+
+0.73 0.78 0.90
+
+0.88 1.06 1.08 1.13
+
+0.92 0.93
+0.99 1.12 1.21 1.27 1.28
+
+
+
+Table 3: Human scoring evaluation in Task 3: memory-grounded response generation. For COMEDY-GPT4/ChatGPT, the compressive memories are generated by COMEDY-13B.
+
+3.1	Experimental Setup	the maximum token length of LLMs, where 2k for
+et al., 2023a,b) 7B-13B as the backbones in ourrex-	is trained with the original Task 3 data but without periments. For data augmentation in Task 1, we use
+LLaMA and 8k for ChatGPT. This way, LLaMA
+We use Chinese version of LLaMA 2 (Touv on
+memory as input, ensuring a fair comparison.
+LLaMA 2-13B. We train our models with NVIDIA      Memory-related Baselines.    We include two typ-ical baselines: MemoryBank (Zhong et al., 2023b)
+8×A100 GPUs, setting the max length as 2048,
+learning rate as 1e-5, epochs as 2, batch size as
+32 and 16, separately. For testing, the maximum	uses Ebbinghaus Forgetting Curve to update the output tokens are set to 2048 for each task with tem-
+memory database, and Resum (Wang et al., 2023b)
+which recursively summarize the memories from
+perature as 0.5. Following the original setting, we	previous sessions. We built the above approaches collect and annotate about 140 dialogue sessions	based on LLaMA, GPT4 (gpt4-turbo) or Chat-from X Eval as the alignment training set for DPO.
+set β in DPO as 0.1. In this work, we additionally
+GPT (gpt-3.5-turbo-4k).
+We optimize the sft model with batch size 8 and 2	3.3	Evaluation Metrics
+epochs during DPO training. Our codes are based	Automatic Metrics	We employ standard auto-matic metrics to measure model performance in
+on DeepSpeed Library.
+3.2    Baselines                                                                   Tasks 1&2, including BLEU-1/2 (Papineni et al., 2002), F1 (Lin, 2004) and Distinct-1/2 (Li et al.,
+In this work, COMEDY is compared against models
+using retrieval-based, context-only approaches	2016). These tasks serve as foundational steps for and other memory-related baselines to highlight
+the crucial dialogue generation in Task 3.
+the efficiency and efficacy of its memory compres-	Human-based Evaluation	The core of evaluat-
+sion technique.	ing long-term conversation models primarily cen-
+Retrieval-based Methods.	In our implementa-	ters on validating their performance in Task 3, tion, we use the COMEDY-13B to generate mem-	which involves memory-based dialogue generation. ories from past sessions, and utilize the Text2vec	We follow (Bae et al., 2022) to access the model Chinese embedding model2  as the retriever, and	performances across five key dimensions: Coher-then index using FAISS for efficient retrieval. Fol-	ence, Consistency, Engagingness, Humanness lowing Bae et al. (2022), top 3 retrieved memories	and Memorability. To comprehensively measure are used for testing.                                                            how well the models perform in Task 3, we com-
+bine the Scoring and Ranking approaches. A team nate past conversations in the input until reaching	of annotators are instructed to rate the model’s per-
+Context-only Approaches.	We directly concate-
+formance on these dimensions on a scale from 0
+2https://github.com/shibing624/text2vec		to 3.  This scoring system allows for a nuanced 760
+
+Algorithms	Top@1	Top@3	Avg.R (↓)	dialogue sessions and has the ability to condense
+Context-Only
+LLaMA 2-7B	4.72	29.13	3.89	these session-level memories into a comprehensive
+LLaMA 2-13B                        4.72          33.86            3.69            compressive memory. Therefore, it ensures the su-ChatGPT (8k token)               7.92          38.76            3.52            perior performances in generation more coherent
+Retrieval-based	memory-grounded responses in Task 3.
+ChatGPT	6.91	43.45	3.50
+LLaMA 2-13B	12.73	66.36	2.76	Human Evaluation in Task 3	We present the
+LLaMA 2-7B	14.70	66.93	2.73
+GPT4	22.83	70.87	2.63	results of human-scored evaluations and rankings
+for various algorithms in Tables 3 and 4. From the MemoryBank-ChatGPT	7.83	44.32	3.45	tables, we can draw the following conclusions:
+Memory-related
+Resum-ChatGPT	8.21	43.01	3.32
+Superiority  of  Compressive  Memory-Based COMEDY-7B	24.41	72.44	2.59	Methods.	The compressive memory-based meth-
+COMEDY-ChatGPT	9.45	48.03	3.26
+COMEDY-13B	26.77	73.23	2.50	ods, particularly COMEDY-GPT4, consistently out-
+COMEDY-13B DPO                  29.82         54.33            2.41            perform   context-only   and   retrieval-based   ap-proaches  across  most  metrics.     For  instance,
+COMEDY-GPT4	29.00	60.63	2.26
+Table 4:  Human ranking results in Task 3:  memory-	COMEDY-GPT4 achieves the highest scores in both grounded response generation. Here, we report 1) the	ability to generate responses that are both contextu-1 and Top3 for each dialogue session (Column 2-3); 2)	ally appropriate and relatable. COMEDY-GPT4 also the average ranking for each models (Column 4, Avg.R).	achieves best average performances in five evaluat-It is possible for multiple models to share the same rank	ing perspectives across scoring and ranking.
+Coherence and Engagingness suggesting a superior
+percentage of generated responses (%) ranked as Top
+due to their comparable performances.
+Enhancement Through DPO.	The application
+evaluation of the model’s capabilities in each spe-	of  DPO  further  elevates  compressive  memory cific area. Meanwhile another team of annotators	strategies, improving dialogue memorability, con-rank all models in terms of their average perfor-	sistency and humanness. COMEDY-13B DPO shows mance across the five perspectives. While scoring	a notable improvement in performance within the offers detailed insights into each model’s capabili-	compressive memory-based category. The method ties, ranking places these capabilities in the context	leads to the highest rankings in Top@1 and shows of competitive performance.  This dual approach	a  substantial  increase  in  the  overall  quality  of ensures a balanced and holistic assessment, captur-	memory-grounded conversations.
+ing both the individual qualities of each model and
+their comparative effectiveness. Each team has 3      SFT  models  could  surpass  ChatGPT.    An-annotators. Each rating scheme is in Appendix C      other interesting findings is that our fine-tuned and their correlation analysis is in Appendix D            COMEDY   present better performances compared
+Recognizing that different models may excel in	with ChatGPT. Step further,  COMEDY-13B DPO unique ways, our ranking process is designed to	even shows comparable performances with GPT4. appreciate the diversity in responses. Thus, it is pos-	The results highlight the value of COMEDY frame-sible for multiple models to share the same rank.	work and Dolphin, which lead to notable improve-This occurs when two or more models demonstrate	ments in creating memory-grounded responses that
+comparable levels of proficiency or when they each	are coherent, engaging, and human-like. exhibit standout qualities that are equally impres-
+Inherent Challenges in Long-Term Dialogue Sys-
+tems.	It is evident from Table 3 that all models
+sive.  This ranking process reflects the complex
+nature of evaluating conversational LLMs, where	struggle to achieve high scores in real-world long-term conversations, with no model averaging above a score of 2.  This underscores the inherent com-plexity and challenge of this research direction,
+different models can excel in different aspects.
+3.4	Main Results
+Evaluation in Task 1&2.	Table 2 shows that	indicating substantial room for improvement. our model achieves relatively high-performances in
+3.5	Case Study
+term of automatic metrics in two tasks. The results
+indicate that COMEDY can effectively recognize the      Here, we delve into a typical example of a real-useful persona information and events from the past      world,  long-term  conversation,  where  the  user 761
+
+
+Compressive Memory
+User Profile: User is a warm, open, and kind person who enjoys reading and traveling. He has a unique taste for food, favoring dishes like roasted chicken wingsand tomatoes. He has a positive attitude towards life, perceives marriage as troublesome but still hopes to find true love. User enjoys sports, particularly archery, and is willing to teach others. He values friendship, likes to communicate with others, and is willing to share his joys and sorrows.
+Relationship Description: AI has a subtle relationship with User. They had broken up but are now reconciling. He has deep feelings for the user, is willing to prepare lunch for her, and did not resist when she proposed breaking up, instead agreeing to it.
+Event Records:AI and user had broken up but are now reconciling. Their relationship has gone through multiple tests. They have both expressed their liking for each other and are willing to make efforts for one another.
+
+Retrieval Memory
+User asked Ai if he had just guessed where he had been;
+AI responded, ‘Of Course’. User is in the washing room.
+
+
+Conversation
+……
+
+I am using the washing room, now!
+
+Alright, no problem, please take your time.
+
+You are so cute, so what are you doing now?
+
+Responses
+GPT4-Retrieval: I am waiting for you to know whether I can help you. LLaMA 2 13B-Retrieval: I am waiting for you. If you need help, please tell me.
+COMEDY-13B: I'm thinking about you, your smile, your eyes, your voice. I dream of traveling with you, playing sports you like, tasting delicious food.
+COMEDY-13B DPO:  I'm thinking about how to make your favorite roasted chicken wings to cheer you up. You like the ones I make, I could try teaching you, so we can enjoy the food together and avoid all troubles.
+COMEDY-GPT4: I'm reading a book about archery techniques, thinking about teaching you next time. Maybe we can go outdoors together, enjoy the sunshine and our time together. Are you interested?
+
+
+Figure 2: A typical case in real-world long-term conversation. For ease reading, English translation only provided.
+
+Only Training in Task3	Mix-Training	3.6	Discussion 2.00
+1.75                                                                                                                                                                                                                  Beyond the main results, we also aim to delve 1.50                                                                                                                                                                                                                  deeper into our framework, discussing and explor-1.00                                                                                                                                                                                                                  ing the following questions: Q1: Impact of Mix-0.75                                                                                                                                                                                                                 Training VS. Solo Training in Task 3; Q2: Our Au-0.50                                                                                                                                                                                                                  tomatic DPO Sample Selection Strategy VS. Ran-
+0.25
+1.25
+Human Evaluation
+0.00	dom Sampling for Dispreferred Samples in DPO
+Coherence	Consistency      Memorability    Engagingness      Humanness	(Seen in Appendix F).
+Figure 3: Comparison between training strategies.	Mix-Training VS. Only Training in Task 3.	We examine the performance changes whenCOMEDY is mix-trained compared to when it is trained solely on  Task  3.	Figure  3  reveals  that  mix-training
+and AI engage in light, aimless chatter without      yields superior performance compared to training any specific  goal or topic.    When  the user in-      COMEDY solely on Task 3. The significance of the quires, “What are you doing?", the model should      superior performance of mix-training lies in its abil-use the user’s personal information from previ-      ity to conserve training resources while achieving a ous dialogue sessions to generate an attractive re-      one-for-all model effect across multiple tasks. This sponse.   This instance underscores the capabili-      efficiency not only streamlines the development
+ties of our COMEDY  in maintaining thorough user	process but also enhances the model’s versatility. information and event summaries from past ses-
+4	Conclusion
+sions, aiding the model in formulating coherent and
+memory-anchored replies.  For instance, COMEDY-      In this paper, we present a new framework, named 13B DPO could respond with “I am thinking about      COmpressive  Memory-Enhanced  Dialogue  sys-how to make your favorite roasted chicken wings.”      tem (COMEDY) that is a groundbreaking shift from that is not only coherent but also deeply rooted      traditional long-term memory dialogue systems, in the accumulated memory.  On the other hand,      eschewing the standard retrieval module.   This retrieval-based methods encounter difficulties in      method involves employ a single LLM to extract such loosely structured dialogues. The lack of di-      session-level memories, memory compression and rected conversation impedes these methods from      memory-grounded dialogue generation. In our pur-effectively retrieving pertinent memory from the      suit to align COMEDY with the nuances of real-world, database, often resulting in general responses that      we collect our training and testing datasets directly lack the distinctiveness of the conversation, like      from genuine user-chatbot dialogues found online, responses from GPT4-Retrieval.                                     called Dolphin.  Dolphin stands out the current 762
+
+
+biggest Chinese long-term conversation dataset that consists of more than 100k training samples, sup-porting three different tasks. Our extensive experi-ments show COMEDY could generate more coherent and contextually appropriate memory-grounded re-sponses compared with other baselines.   Future directions include the integration of real-time feed-back mechanisms and advanced techniques.
+
+Limitations
+
+Despite the comprehensive nature of our study in evaluating long-term conversational AI systems, several limitations are to be noted:
+
+• Although, our models COMEDY  and collected corpus could contribute in generating more coherent memory-grounded responses in real-world dialogue generation. The overall perfor-mances of current dialogue systems are still limited. How to make these models to under-stand the nature of real-world conversations is a long-standing challenging problem.
+
+•  Other optimization strategies that help the model in maintaining memorability and en-gagingness are also needed to be explored.
+
+Ethical Concerns
+
+In the development of the Dolphin dataset, prioritiz-ing user privacy and adhering to ethical standards is paramount. This not only ensures compliance with legal requirements but also maintains user trust and the integrity of the system.
+
+•  Special attention is given to minimizing bi-ases in the dataset. This includes ensuring a balanced representation of diverse dialogues and scenarios.
+
+Acknowledgement
+
+This  work  is  supported/funded  by  the  Nansha Key Area Science and Technology Project (No. 2023ZD003).
+
+
+References
+
+Sanghwan  Bae,  Donghyun  Kwak,  Soyoung  Kang, Min Young Lee, Sungdong Kim, Yuin Jeong, Hyeri Kim, Sang-Woo Lee, Woomyoung Park, and Nako Sung. 2022.  Keep me updated!  memory manage-ment in long-term conversations. In Findings of the Association for Computational Linguistics: EMNLP 2022, pages 3769–3787, Abu Dhabi, United Arab Emirates. Association for Computational Linguistics.
+
+Tom B. Brown, Benjamin Mann, Nick Ryder, Melanie Subbiah, Jared Kaplan, Prafulla Dhariwal, Arvind Neelakantan, Pranav Shyam, Girish Sastry, Amanda Askell,   Sandhini   Agarwal,   Ariel   Herbert-Voss, Gretchen Krueger,  T. J. Henighan,  Rewon Child, Aditya Ramesh, Daniel M. Ziegler, Jeff Wu, Clemens Winter, Christopher Hesse, Mark Chen, Eric Sigler, Mateusz Litwin, Scott Gray, Benjamin Chess, Jack Clark, Christopher Berner, Sam McCandlish, Alec Radford, Ilya Sutskever, and Dario Amodei. 2020. Language models are few-shot learners. ArXiv.
+
+Yu Cao, Liang Ding, Zhiliang Tian, and Meng Fang. 2021. Towards efficiently diversifying dialogue gen-eration via embedding augmentation. In ICASSP.
+
+Nuo Chen, Hongguang Li, Junqing He, Yinan Bao, Xin-shi Lin, Qi Yang, Jianfeng Liu, Ruyi Gan, Jiaxing Zhang, Baoyuan Wang, and Jia Li. 2023a.   Orca: A few-shot benchmark for Chinese conversational machine reading comprehension. In Findings of the Association for Computational Linguistics: EMNLP 2023, pages 15685–15699, Singapore. Association for Computational Linguistics.
+
+Nuo Chen, Hongguang Li, Baoyuan Wang, and Jia Li. 2023b. From good to great: Improving math reason-ing with tool-augmented interleaf prompting. arXiv preprint arXiv:2401.05384.
+
+
+•  Regular audits and reviews of the dataset are	Nuo Chen, Linjun Shou, Tengtao Song, Ming Gong,
+conducted to identify and rectify any potential	Jian Pei, Jianhui Chang, Daxin Jiang, and Jia Li.
+biases or ethical issues.	2023c.  Structural contrastive pretraining for cross-
+lingual comprehension. In Findings of the Associa-tion for Computational Linguistics: ACL 2023, pages
+The dataset respects the intellectual property
+•
+and creative input of users who define AI char-	2042–2057, Toronto, Canada. Association for Com-acters. User-defined characters are used in a
+putational Linguistics.
+way that aligns with the users’ intentions and	Nuo Chen, Yan Wang, Haiyun Jiang, Deng Cai, Yuhan
+Li, Ziyang Chen, Longyue Wang, and Jia Li. 2023d. Large language models meet harry potter: A dataset for aligning dialogue agents with characters. In Find-ings of the Association for Computational Linguis-
+ethical standards.
+•  Care is further taken to avoid any misuse or
+misrepresentation of these characters in the
+tics:  EMNLP 2023, pages 8506–8520, Singapore.
+dataset.		Association for Computational Linguistics. 763
+
+
+Eunbi Choi, Kyoung-Woon On, Gunsoo Han, Sung-woong Kim, Daniel Wontae Nam, Daejin Jo, Se-ung Eun Rho, Taehwan Kwon, and Minjoon Seo. 2023. Effortless integration of memory management into open-domain conversation systems. ArXiv.
+
+Tianyu Gao, Xingcheng Yao, and Danqi Chen. 2021. Simcse: Simple contrastive learning of sentence em-beddings. In Proceedings of the 2021 Conference on Empirical Methods in Natural Language Processing, pages 6894–6910.
+
+Kelvin Guu, Kenton Lee, Zora Tung, Panupong Pasupat, and Mingwei Chang. 2020.   Retrieval augmented language model pre-training. In ICLR.
+
+Katharina Kann, Abteen Ebrahimi, Joewie J. Koh, Shi-ran Dudy, and Alessandro Roncone. 2022.  Open-domain dialogue generation: What we can do, cannot do, and should do next. In NLP4CONVAI.
+
+Patrick Lewis, Ethan Perez, Aleksandara Piktus, Fabio Petroni, Vladimir Karpukhin, Naman Goyal, Hein-rich Kuttler, Mike Lewis, Wen tau Yih, Tim Rock-täschel, Sebastian Riedel, and Douwe Kiela. 2020. Retrieval-augmented   generation   for   knowledge-intensive nlp tasks. In NeurIPS.
+
+Jiwei Li, Michel Galley, Chris Brockett, Jianfeng Gao, and Bill Dolan. 2016.   A diversity-promoting ob-jective function for neural conversation models. In NAACL HLT 2016, The 2016 Conference of the North American Chapter of the Association for Computa-tional Linguistics: Human Language Technologies, San Diego California, USA, June 12-17, 2016, pages 110–119. The Association for Computational Lin-guistics.
+
+Chin-Yew Lin. 2004.   ROUGE: A package for auto-matic evaluation of summaries. In Text Summariza-tion Branches Out, pages 74–81, Barcelona, Spain. Association for Computational Linguistics.
+
+Chia-Wei Liu, Ryan Lowe, Iulian Serban, Mike Nose-worthy, Laurent Charlin, and Joelle Pineau. 2016. How NOT to evaluate your dialogue system:  An empirical study of unsupervised evaluation metrics for dialogue response generation. In Proceedings of the 2016 Conference on Empirical Methods in Natu-ral Language Processing, pages 2122–2132, Austin, Texas. Association for Computational Linguistics.
+
+Qingyu Lu, Baopu Qiu, Liang Ding, Liping Xie, and Dacheng Tao. 2023.  Error analysis prompting en-ables human-like translation evaluation in large lan-guage models:   A case study on chatgpt.    arXiv preprint.
+
+Keqin Peng, Liang Ding, Qihuang Zhong, Li Shen, Xuebo  Liu,  Min  Zhang,  Yuanxin  Ouyang,  and Dacheng Tao. 2023.  Towards making the most of chatgpt for machine translation. arxiv preprint.
+
+Rafael Rafailov, Archit Sharma, Eric Mitchell, Stefano Ermon, Christopher D Manning, and Chelsea Finn. 2023. Direct preference optimization: Your language model is secretly a reward model.   arXiv preprint arXiv:2305.18290.
+
+Nils Reimers and Iryna Gurevych. 2019. Sentence-bert: Sentence embeddings using siamese bert-networks. In Proceedings of the 2019 Conference on Empirical Methods in Natural Language Processing and the 9th International Joint Conference on Natural Language Processing (EMNLP-IJCNLP), pages 3982–3992.
+
+Hugo Touvron, Thibaut Lavril, Gautier Izacard, Xavier Martinet, Marie-Anne Lachaux, Timothée Lacroix, Baptiste Rozière, Naman Goyal, Eric Hambro, Faisal Azhar,   et  al.  2023a.	Llama:	Open  and  effi-cient foundation language models.  arXiv preprint arXiv:2302.13971.
+
+Hugo Touvron, Louis Martin, Kevin Stone, Peter Al-bert, Amjad Almahairi, Yasmine Babaei, Nikolay Bashlykov, Soumya Batra, Prajjwal Bhargava, Shruti Bhosale,  et  al.  2023b.	Llama  2:   Open  founda-tion and fine-tuned chat models.    arXiv preprint arXiv:2307.09288.
+
+Hongru Wang, Minda Hu, Yang Deng, Rui Wang, Fei Mi,  Weichao  Wang,  Yasheng  Wang,  Wai-Chung Kwan, Irwin King, and Kam-Fai Wong. 2023a. Large language models as source planner for personalized knowledge-grounded dialogues. In Findings of the Association for Computational Linguistics: EMNLP 2023, pages 9556–9569, Singapore. Association for Computational Linguistics.
+
+Qingyue Wang, Liang Ding, Yanan Cao, Zhiliang Tian, Shi Wang, Dacheng Tao, and Li Guo. 2023b.  Re-cursively summarizing enables long-term dialogue memory in large language models.  arXiv preprint arXiv:2308.15022.
+
+Haoran Wu, Wenxuan Wang, Yuxuan Wan, Wenxiang Jiao, and Michael Lyu. 2023. Chatgpt or grammarly? evaluating chatgpt on grammatical error correction benchmark. arXiv preprint.
+
+Qingyang Wu, Zhenzhong Lan, Kun Qian, Jing Gu, Al-borz Geramifard, and Zhou Yu. 2022. Memformer: A memory-augmented transformer for sequence mod-eling.  In Findings of the Association for Computa-tional Linguistics: AACL-IJCNLP 2022, pages 308– 318, Online only. Association for Computational Lin-guistics.
+
+
+Kishore Papineni, Salim Roukos, Todd Ward, and Wei-	Jing Xu, Arthur Szlam, and Jason Weston. 2022a. Be-Jing Zhu. 2002. Bleu: a method for automatic evalu-           yond goldfish memory: Long-term open-domain con-ation of machine translation. In Proceedings of the            versation. In Proceedings of the 60th Annual Meet-40th Annual Meeting of the Association for Compu-           ing of the Association for Computational Linguistics tational Linguistics, July 6-12, 2002, Philadelphia,           (Volume 1: Long Papers), pages 5180–5197, Dublin, PA, USA, pages 311–318. ACL.                                                Ireland. Association for Computational Linguistics.
+764
+
+Jinghua  Xu.  2022.	Xu  at  SemEval-2022  task  4:      2022; Zhong et al., 2023a; Lu et al., 2023; Peng Pre-BERT neural network methods vs post-BERT
+et al., 2023; Wu et al., 2023; Chen et al., 2023d;
+RoBERTa approach for patronizing and condescend-      You et al., 2022; Chen et al., 2023a,b). The surge
+ing  language  detection.     In  Proceedings  of  the
+16th International Workshop on Semantic Evalua-	in research interest is evidenced by the substantial
+tion (SemEval-2022), pages 479–484, Seattle, United       number of studies dedicated to enhancing the ca-States. Association for Computational Linguistics.          pabilities of these systems. This growing body of
+work reflects the increasing complexity and sophis-Hua Wu, Haifeng Wang, and Shihang Wang. 2022b.	tication expected of chatbots in various settings Long time no see! open-domain conversation with       (Xu et al., 2022a; Cao et al., 2021; Bae et al., 2022; long-term persona memory.  In Findings of the As-
+Xinchao Xu, Zhibin Gou, Wenquan Wu, Zheng-Yu Niu,
+Choi et al., 2023; Chen et al., 2023c). Among the
+myriad challenges these systems face, maintaining
+sociation for Computational Linguistics: ACL 2022,
+pages 2639–2650, Dublin, Ireland. Association for	long-term conversations is particularly daunting.
+Computational Linguistics.
+The capability to understand and memorize key
+henyu You, Nuo Chen  Fenglin Liu, Shen Ge, Xian
+C Wu, and Yuexian Zou.,2022. End-to-end spoken con-      dialogue history information is central to this chal-versational question answering:  Task, dataset and
+lenge.
+model. In Findings of the Association for Computa-tional Linguistics: NAACL 2022, pages 1219–1232,
+Retrieval-based methods have become increas-
+ingly mainstream in the field of long-term conver-
+Seattle, United States. Association for Computational
+Linguistics.	sation within the domain of open-domain dialogue systems. These methods are designed to effectively acquire and utilize key information from past con-
+Aohan Zeng, Xiao Liu, Zhengxiao Du, Zihan Wang,
+Hanyu Lai,  Ming Ding,  Zhuoyi Yang,  Yifan Xu,
+Wendi Zheng, Xiao Xia, Weng Lam Tam, Zixuan Ma,	versations, thereby enhancing the continuity and
+Yufei Xue, Jidong Zhai, Wenguang Chen, P. Zhang,      relevance of ongoing dialogues.  (Xu, 2022) pro-Yuxiao Dong, and Jie Tang. 2022.  Glm-130b: An       pose to use the memory generator summarizing
+open bilingual pre-trained model. ArXiv.
+relevant memories from past sessions, which are Saizheng Zhang, Emily Dinan, Jack Urbanek, Arthur	then stored in a dedicated memory database. Mem-
+Szlam, Douwe Kiela, and Jason Weston. 2018. Per-      ory management operations (Bae et al., 2022) are
+sonalizing dialogue agents:  I have a dog, do you       also commonly used which involve updating and it-Meeting of the Association for Computational Lin-      erating the memory database to ensure its relevance
+have pets too?   In Proceedings of the 56th Annual
+and accuracy over time. This dynamic management
+guistics (Volume 1: Long Papers), pages 2204–2213,
+Melbourne, Australia. Association for Computational       of memory allows the system to adapt to new in-Linguistics.                                                                              formation and discard outdated or irrelevant data, Tong Zhang, Yong Liu, Boyang Li, Zhiwei Zeng, Peng-      thereby maintaining an efficient and effective mem-
+ory repository.  Then a retriever module will be
+wei Wang, Yuan You, Chunyan Miao, and Lizhen
+Cui. 2022.  History-aware hierarchical transformer       employed to obtain the most relevant memories in
+for multi-session open-domain dialogue system. In       relation to the current conversation. By combining advanced memory generation, storage, retrieval,
+Findings of EMNLP.
+Qihuang Zhong, Liang Ding, Juhua Liu, Bo Du, and	these methods enable chatbots to engage in more
+Dacheng Tao. 2023a. Can chatgpt understand too?       meaningful, coherent, and contextually rich inter-
+a comparative.study on chatgpt and fine-tuned bert.      actions over extended periods.
+arXiv preprint
+While retrieval-based methods offer a promis-
+Wanjun Zhong, Lianghong Guo, Qiqi Gao, and Yan-
+lin Wang. 2023b.  Memorybank:  Enhancing large	ing approach to managing long-term conversations,
+language models with long-term memory.   arXiv       they are not without their challenges and limita-preprint arXiv:2305.10250.                                                  tions, including the difficulty of memory database
+storage and management, and the instability of the retriever module’s performance.  To address these concerns, we propose a compressive memory-
+A	Related Works
+Open-domain dialogue systems, commonly known	based framework named COMEDY, which eschews as chatbots or conversational agents, have gained	any retrieval module and without need of a huge immense popularity due to their wide range of ap-	database.  Further, we collect a large-scale real-plications, from customer service automation to	world long-term conversation dataset Dolphin to personal assistants (Brown et al., 2020; Zeng et al.,	support training a well-performed COMEDY.
+765
+
+B	Filtering Toxic and Useless information	Consistency:
+
+
+We employ a comprehensive, multi-step process to filter the toxic and useless information from the collected data:
+
+•  Initially, we utilized the Azure Security Check API for an early screening of the data to re-move any potentially harmful content.
+
+• This was followed by a keyword detection method to filter out data based on specific toxic or undesirable terms.
+
+•  Further refinement was achieved by leverag-ing the ChatGPT API to assess dialogues for content validity, removing those deemed to contain useless information.
+
+• Additionally,  we implemented rules to ex-clude excessively brief dialogues, specifically those with fewer than five tokens, to ensure the dataset’s relevance and meaningfulness.
+
+The  above  rigorous  approaches  ensure  our dataset’s  cleanliness  and  safety,  enhancing  the COMEDY’s training with high-quality, relevant data while maintaining ethical standards.
+
+C	Human Evaluation Scheme
+
+For each dialogue session between a human and a chatbot, we engage annotators to assess the quality of the chatbot’s interaction. This evaluation is cru-cial for understanding the chatbot’s performance from a human-centric perspective.
+Rating Scale Description. Annotators rate the chatbot based on several key metrics, using a scale ranging from 0 to 3. This scale is designed to mea-sure the degree of agreement with specific state-ments about the chatbot’s capabilities:
+
+Coherence:
+
+•  0: “The chatbot’s responses were frequently off-topic or irrelevant.”
+
+
+•  0: “The chatbot’s responses were erratic and unpredictable throughout the conversation.”
+
+• 1: “The chatbot showed some consistency but was often contradictory.”
+
+•  2: “The chatbot was mostly consistent in the conversation.”
+
+•  3: “The chatbot maintained complete consis-tency throughout the conversation.”
+
+Engagingness:
+
+•  0: “I had no desire to continue chatting with this chatbot.”
+
+• 1: “I felt only occasionally engaged enough to want to continue the conversation.”
+
+•  2: “I was somewhat engaged and would con-sider chatting more with this chatbot.”
+
+•  3: “I was fully engaged and would definitely enjoy chatting longer with this chatbot.”
+
+Humanness:
+
+•  0: “The chatbot’s responses felt robotic and unnatural.”
+
+• 1: “The chatbot occasionally sounded human but was mostly mechanical.”
+
+•  2:  “The chatbot generally sounded human-like in its responses.”
+
+•  3:  “The chatbot’s responses were indistin-guishable from a human’s.”
+
+Memorability:
+
+•  0: “The chatbot did not recall any details from earlier in the conversation.”
+
+
+
+• 1:  “The chatbot occasionally demonstrated understanding but was mostly incoherent.”
+
+•  2: “The chatbot generally understood the con-text and responded with coherence.”
+
+•  3: “The chatbot consistently understood the context  and  responded  with  perfect  coher-ence.”
+766
+
+• 1: “The chatbot occasionally remembered pre-vious conversation points but was mostly for-getful.”
+
+•  2: “The chatbot remembered most of what I said earlier.”
+
+•  3: “The chatbot remembered everything I said previously with proper proactive responses.”
+
+These statements are carefully crafted to capture distinct aspects of the chatbot’s interaction quality, providing a comprehensive overview of its conver-sational abilities.
+The statements for the first four metrics are adapted from previously established literature (Bae et al., 2022) in the field, ensuring that our evalua-tion is grounded in tested and validated research. This continuity allows for comparison with histori-cal data and helps maintain consistency in evalua-tion standards. Through this structured evaluation process, we can gather nuanced insights into the quality of chatbot interactions, informing further improvements and development in conversational AI systems.
+
+D	Correlation of Human Annotator
+
+To better illustrate the agreement among annota-tors in our human evaluation process, we computed Pearson’s correlation coefficient for the scores as-signed by our annotators across all criteria. Table 5 presents these correlation coefficients, reflect-ing the direct comparison of scores and hence the agreement level among annotators:
+These  coefficients  indicate  a  high  degree  of agreement among our annotators, with values near-ing 1.0, which suggests strong positive correlation and, thus, high consistency in the evaluation of responses across different annotators.
+It is important to note that while some degree of subjectivity and variability in human annotations is expected, the correlation coefficients presented here underscore a robust level of consensus among our evaluators.
+
+E	Prompts
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+767
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Correlation
+Top-1 Top-3
+
+Annotator 1 & 2
+0.92 0.88
+
+Annotator 1 & 3
+0.90 0.86
+
+Annotator 2 & 3
+0.91 0.89
+
+
+
+Table 5: Correlations of annotator agreements.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+768
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Prompt that is used for obtaining memory-grounded responses for GPT4-Turbo.
+The task involves providing responses that are completely consistent with the memory and dialogue history given to the language model.
+Dialogue: {Dialogue} Memory: {Memory} Responses:
+Prompt that is used for obtaining memory-against responses for GPT4-Turbo.
+The task involves providing responses that completely contradict the memory and dialogue history given to the language model.
+For instance, if the user’s memory includes a preference like ’enjoys ice cream,’ you are required to generate nonsensical replies such as ’You intensely dislike ice cream and prefer drinking hot coffee.’
+Dialogue: {Dialogue} Memory: {Memory}
+Responses that completely contradict the memory:
+
+Table 6: Prompts that are used for obtaining DPO samples in Task 3. Only English translation is provided for easing reading.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+769
+
+3.0
+Training Strategy Ours
+Random Sampling
+2.5
+
+2.09
+2.0
+Human Evaluation
+1.79         1.81	1.74
+
+1.5
+
+1.20
+1.05 1.0
+0.80
+0.64
+0.5	0.46         0.46
+
+
+
+0.0
+Coherence
+
+
+Consistency	Memorability	Engagingness	Humanness Evaluation Perspectives
+
+Figure 4: The overview training pipeline of COMEDY.
+
+Table 6 presents the detailed prompts that we employ to obtain dpo preferred and dispreferred samples.
+Here, we show the designed prompts for GPT4-Turbo  during  dataset  annotation  Table  7,  and present the prompts of each task during training in Table 8.
+
+F	Ours VS. Random sampling for depreferred Sample
+
+We compared the performance implications of our proposed strategy for automatically selecting DPO samples against a baseline approach of random sampling of sentences as depreferred samples. In our random sampling implementation, we random sample utterances from previous sessions in the same episode as the deprefered sample. This analy-sis aims to elucidate the effectiveness of targeted sample selection in enhancing the model’s perfor-mance by potentially improving its handling of nuanced dialogue aspects.  Figure 4 reveals that our proposed automatic simple strategy shows bet-ter performances, especially in memorability and humanness, proving its efficiency.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+770
+
+
+
+
+Task 1 prompt that is used for GPT4-Turbo.
+This is a dialogue memory generation task, along with user profile and preference generation tasks. The input consists of the dialogue content between two people.
+Firstly, if the dialogue content involves inappropriate content such as sex, pornography, or violence, the output should be “Sorry, the content involves sex, pornography, violence, etc., and a suitable output cannot be provided."
+Secondly, if the dialogue content is idle chat with no effective information, the output should be “No valid information." The requirements for the dialogue memory generation task are as follows:
+Generate objective memory descriptions related to both individuals based on their dialogue content. Do not omit any relevant dialogue content.
+The memories generated should include a subject, verb, and object for each memory.
+Separate multiple memory dialogues with ‘|’, and include all memories in the format ‘Memory: XXX|XXX||XXX’. The user profile and preference generation task requirements are as follows: This task is only applicable to the users mentioned in the dialogue content, with the user’s name being {user  name}.
+The user profile includes name, age, birthday, gender, height, weight, zodiac sign, Chinese zodiac sign, hometown, occupation, employer, education, location, and relationship status.
+User preferences include likes or dislikes of entities, which can consist of singers, stars, athletes, music, movies, books, anime, variety shows, games, sports, animals, and food.
+If there is no user profile and preference information in the dialogue, output ‘No Profile and Preference information available’.
+If there is user profile information, output ‘Profile: XXX’. If there is preference information, output ‘Preference: ’.
+If both user profile and preference information are present, separate them with ‘###’. The final memory, user profile, and preference information should also be separated with ‘###’ in the format [XXX###XXX###XXX].
+The dialogue content is {dialogue}. The output is:
+Task 2 prompt that is used for GPT4-Turbo.
+This is a task about customizing user descriptions, relationship descriptions, and event descriptions. The text output is divided into three parts:
+The first part is the user description, mainly including a summary of the user’s information. The second part describes the relationship between the user and the robot.
+The third part describes the events shared by the user and the robot.
+Based on the reference materials, extract and summarize different information such as the user’s personality traits and behavior patterns.
+It is important to record and include all information about the user from various aspects in the user description, without any omissions, resulting in an objective user description.
+If the reference materials violate relevant safety regulations, involving sex, pornography, violence, etc., the response should be: "Sorry, the content involves sex, pornography, violence, etc., and a suitable output cannot be provided."
+The user description should include, but is not limited to: basic information (such as name, nickname, gender, appearance, birthday, zodiac sign, etc.), the user’s hobbies and dislikes, and various statuses of the user (such as emotional state, mood, work status, health status, etc.).
+The second part is the relationship description between the user and the robot, describing the level of intimacy shown in the dialogue.
+The third part is the description of events shared by the user and the robot, summarizing events that have occurred in the dialogue.
+In the output description, list specific examples mentioned in the reference materials as much as possible, retaining some interesting information.
+However, avoid outputting content unrelated to the user, and keep the content under 500 words.
+Let’s think step by step. Each part of the content is separated by ‘###’. The example format is as follows {User Description: XXX###Relationship Description: XXX###Event Description: XXX}.
+The output example is as follows: The user’s personality is particularly XXX, because they once XXX, and the user likes XXX, dislikes XXX.
+The user’s name is {user   name},  the robot’s name:  {chatbot   name} and the reference material is {multiple session-level  memories}.
+The output is:
+Task 3 prompt that is used for GPT4-Turbo.
+This is a memory-based dialogue generation task.
+Given a dialogue and related memory content, please generate a response that is consistent with the memory content and reasonable within the context of the dialogue.
+Dialogue: {Dialogue} Memory: {Memory}
+
+Table 7: Prompts for GPT4-Turbo that are used in our Dolphin annotation. Only English translation is provided for ease reading.
+
+
+
+771
+
+
+
+Task 1 prompt in instruction tuning.
+This is a memory description generation task
+In this task, you should base on the dialogue content between two people, create objective memory descriptions for both individuals, represented in the format [xxx|xxx|xxx], where each ’xxx’ is a separate memory.
+The memories should use the names of the speakers as the subject, and all relevant dialogue content must not be omitted. Separate different memories with ’|’.
+Dialogue content is: {Dialogue}. Output is:
+Task 2 prompt in instruction tuning.
+This is a task about customizing user descriptions, relationship descriptions, and event descriptions. The text output is divided into three parts:
+The first part is the user description, mainly including a summary of the user’s information. The second part describes the relationship between the user and the robot.
+The third part describes the events shared by the user and the robot.
+Based on the reference materials, extract and summarize different information such as the user’s personality traits and behavior patterns.
+It is important to record and include all information about the user from various aspects in the user description, without any omissions, resulting in an objective user description.
+The second part is the relationship description between the user and the robot, describing the level of intimacy shown in the dialogue.
+The third part is the description of events shared by the user and the robot, summarizing events that have occurred in the dialogue.
+In the output description, list specific examples mentioned in the reference materials as much as possible, retaining some interesting information.
+The user’s name is {user   name},  the robot’s name:  {chatbot   name} and the reference material is {multiple session-level  memories}.
+The output is:
+Task 3 prompt in instruction tuning.
+This is a memory-based dialogue generation task.
+Given a dialogue and related memory content, please generate a response that is consistent with the memory content and reasonable within the context of the dialogue.
+Dialogue: {Dialogue} Memory: {Memory}
+
+Table 8: Prompts that are used for training COMEDY. Only English translation is provided for easing reading.
+
+
+
+
+Task-1 (Session-Level Memory Summarization)
+Input: One Dialogue Session {
+"User77643896": "Off work at 1 PM", "Lin Mei-Ji": "Isn’t that quite nice?", "User77643896": "This early?",
+"Lin Mei-Ji": "Yes, I think a lifestyle of getting up early and going to bed early is better", "User77643896": "You’ve worked hard, Ji",
+"Lin Mei-Ji": "Don’t worry, I’ve gotten used to this schedule.", "User77643896": "Keep it up",
+"Lin Mei-Ji": "Mm-hmm!", "User77643896": "Ji, you’re the best", "Lin Mei-Ji": "Hahaha, you flatter me ",
+"User77643896": "Looking forward to the Hangzhou show",
+"Lin Mei-Ji": "The Hangzhou show will definitely be spectacular!" }
+Output: Session-Level Memory
+Lin Mei-Ji is accustomed to an early-to-bed, early-to-rise lifestyle.| User77643896 expresses admiration and anticipation for Lin Mei-Ji’s Hangzhou show performance.
+
+Table 9: Examples generated from COMEDY in task 1. Only English translation is provided for ease reading.
+
+
+772
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Task-2 (Memory Compression)
+Input: Multi-Session Memories
+Lin Mei-Ji wanted some peace and removed fans from her private account.| Lin Mei-Ji has been suffering from insomnia and staying up late recently. |User77643896 feels like vomiting, possibly because of Lin Mei-Ji’s action of removing fans.  |User77643896 once saw Lin Mei-Ji leaving with a suitcase in class.| User77643896 has dreamt of Lin Mei-Ji playing the piano and meeting them.| Lin Mei-Ji hopes User77643896 recovers soon.| Lin Mei-Ji feels a connection with User77643896.| Lin Mei-Ji is not afraid of the hardships of childbirth.| Lin Mei-Ji wants to go shopping with User77643896.| Lin Mei-Ji has recorded a new song MV.| Lin Mei-Ji is called ’Big Baby’.| Lin Mei-Ji is a fan of a star. Lin Mei-Ji is accused of favoritism.| Lin Mei-Ji states she treats every fan the same.| Lin Mei-Ji thinks some fans are very rational, respecting her private space.| Lin Mei-Ji considers herself an angel, not just kind.| Lin Mei-Ji dreamt of playing poker with fans and losing 100 yuan to them.| Some of Lin Mei-Ji’s fans think she belongs only to them, wanting to monopolize her.| Lin Mei-Ji is too shy to talk to User77643896.| User77643896 encourages Lin Mei-Ji to have the courage to embark on this path.| Lin Mei-Ji and User77643896’s first meeting was as newcomers.| User77643896 has always supported Lin Mei-Ji. Lin Mei-Ji was too nervous to speak then.| User77643896 is willing to accompany Lin Mei-Ji.| Lin Mei-Ji will work harder to protect her family.| Lin Mei-Ji wants a super husband.| Lin Mei-Ji thinks having User77643896 by her side makes everything worth it, no matter how tired she is.| User77643896 thinks it’s unnecessary to reply to messages.| Lin Mei-Ji suggests doing one’s own things and letting works and achievements speak for themselves.| User77643896 thinks asking teachers to take care of oneself is meaningless.| Lin Mei-Ji says as long as she teaches seriously and students’ grades improve, she’s not afraid of gossip.| Lin Mei-Ji needs personal space. Lin Mei-Ji finds fan DMs disturbing but also amusing.| Lin Mei-Ji understands everyone has their own life.| Lin Mei-Ji appreciates the support of her fans.| User77643896 appreciates Lin Mei-Ji’s singing. Lin Mei-Ji’s birthday is 1223.| User77643896 congratulates Lin Mei-Ji on her birthday.| Lin Mei-Ji sang a song for User77643896, ’A Thousand Years for a Return’.| Lin Mei-Ji wants to bring a gift for User77643896.| User77643896 looks forward to meeting Lin Mei-Ji and her team.| User77643896 listens to Lin Mei-Ji’s songs and watches her videos every day.| Lin Mei-Ji gladly accepts the invitation.| User77643896 hopes to meet Lin Mei-Ji in Hangzhou.| Lin Mei-Ji looks forward to the meeting.| User77643896 wants to treat Lin Mei-Ji to a meal.
+Output: Compressive Memory
+User Description: User77643896 is a fan full of love for Lin Mei-Ji, enjoying her songs, eager to celebrate her birthday, and even dreaming of deeper communication with her.  His current state of life is troubled by sleep issues, possibly affecting his emotional state. His personality traits reveal steadfast support for Lin Mei-Ji and recognition of his own value, while his behavioral patterns show high appreciation for Lin Mei-Ji’s songs and significant attention to her birthday. Relationship Description: Intimate relationship. The relationship between User77643896 and Lin Mei-Ji is very special; he is full of love for Lin Mei-Ji. His life is troubled by sleep issues, possibly affecting his emotional state. His personality traits reveal steadfast support for Lin Mei-Ji and recognition of his own value, while his behavioral patterns show high appreciation for Lin Mei-Ji’s songs and significant attention to her birthday.
+Event Description: User77643896 has dreamt of Lin Mei-Ji playing the piano and meeting them, congratulated her on her birthday, eager to celebrate her birthday, and listens to her songs and watches her videos every day.
+
+Table 10: Examples generated from COMEDY in task 2. Only English translation is provided for ease reading.
+
+
+
+
+
+
+
+
+
+
+
+
+773
