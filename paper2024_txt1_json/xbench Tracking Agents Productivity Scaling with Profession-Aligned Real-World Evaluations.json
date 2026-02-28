@@ -1,4 +1,5 @@
 {
     "is_related_to_agent_memory": false,
+    "has_github_link": true,
     "source_file": "xbench Tracking Agents Productivity Scaling with Profession-Aligned Real-World Evaluations.md"
 }

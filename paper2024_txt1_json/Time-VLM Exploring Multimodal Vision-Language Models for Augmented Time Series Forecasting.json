@@ -1,4 +1,5 @@
 {
     "is_related_to_agent_memory": false,
+    "has_github_link": true,
     "source_file": "Time-VLM Exploring Multimodal Vision-Language Models for Augmented Time Series Forecasting.md"
 }

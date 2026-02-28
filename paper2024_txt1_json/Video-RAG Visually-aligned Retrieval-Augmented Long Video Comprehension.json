@@ -1,4 +1,5 @@
 {
     "is_related_to_agent_memory": false,
+    "has_github_link": true,
     "source_file": "Video-RAG Visually-aligned Retrieval-Augmented Long Video Comprehension.md"
 }

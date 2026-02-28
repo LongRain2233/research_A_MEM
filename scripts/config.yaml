@@ -1,0 +1,15 @@
+api_key: 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
+base_url: https://openrouter.ai/api/v1
+model: openai/gpt-4o
+input_dir: D:\research\research_A_MEM\paper2024_txt1_json
+backup_dir: D:\research\research_A_MEM\paper2024_txt1_json_backup_v1
+dry_run: false
+backup: true
+max_retries: 3
+retry_delay: 2
+
+# 新增并发配置
+max_workers: 100          # 并发线程数（建议 3-10）
+delay_between_calls: 0.1 
+
+# anthropic/claude-sonnet-4.5

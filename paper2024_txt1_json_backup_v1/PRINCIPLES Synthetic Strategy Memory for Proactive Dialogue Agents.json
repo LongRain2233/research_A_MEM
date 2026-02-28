@@ -1,0 +1,8 @@
+{
+    "is_related_to_agent_memory": true,
+    "has_github_link": false,
+    "title": "PRINCIPLES: Synthetic Strategy Memory for Proactive Dialogue Agents",
+    "problem_and_motivation": "本文旨在解决主动对话（如情感支持、劝说）中智能体策略规划的三大核心缺陷。\n1.  **策略覆盖有限**：现有方法依赖预定义的、规模较小（8-16个）的策略集合，限制了智能体在多样化真实场景中的适应性。\n2.  **策略偏好偏差**：大型语言模型（LLM）在选择策略时存在固有偏好偏差，阻碍其识别最优策略。\n3.  **依赖昂贵训练**：许多方法需要额外的监督微调或强化学习来训练外部规划器，成本高昂且泛化能力受限。\n本文的核心切入点是：**通过离线自博弈模拟，构建一个可重用的、结构化的合成策略记忆库（PRINCIPLES）**，以在推理时指导策略选择，从而在不增加训练成本的前提下，扩展策略覆盖并缓解偏好偏差。",
+    "core_method": "#### **核心数据流：离线构建 + 在线检索**\n1.  **离线构建（PRINCIPLES Construction）**：\n    *   **输入**：在训练集上运行50次自博弈模拟，每次模拟从对话首轮开始，最多进行10轮。\n    *   **处理**：每轮由评论模型（Critic）根据公式 \\( r_t = \\frac 1 l \\sum_{i=1}^l f(\\mathsf{LLM}_\\theta^{(i)}(\\rho_c; s_t, a_t, u_t)) \\) 计算标量奖励。\n    *   **成功检测**：若 \\( r_t > r_{t-1",
+    "source_file": "PRINCIPLES Synthetic Strategy Memory for Proactive Dialogue Agents.md"
+}

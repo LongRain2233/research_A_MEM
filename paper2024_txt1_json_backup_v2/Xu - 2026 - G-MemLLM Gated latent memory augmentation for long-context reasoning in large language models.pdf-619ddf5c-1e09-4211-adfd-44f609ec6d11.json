@@ -1,0 +1,8 @@
+{
+    "is_related_to_agent_memory": true,
+    "has_github_link": false,
+    "title": "G-MEMLLM: GATED LATENT MEMORY AUGMENTATION FOR LONG-CONTEXT REASONING IN LARGE LANGUAGE MODELS",
+    "problem_and_motivation": "本文旨在解决大语言模型（LLMs）在**多跳推理**和**长上下文任务**中的核心缺陷：模型有限的上下文窗口和**长期事实一致性**难以维持。现有方法如上下文压缩（如Gist Tokens）会导致信息瓶颈和**上下文腐化（context rot）**，而循环状态传递（如RMT）则存在**知识梯度消失**和**信息被后续噪声覆盖**的问题。本文的核心切入点是：为LLM引入一个**可选择性更新的工作记忆**，通过**门控机制**来管理信息的生命周期，区分瞬时上下文与长期知识，从而提升模型在多跳问答和关系抽取任务中的表现。",
+    "core_method": "#### **核心架构：G-MemLLM**\n系统由**冻结的LLM主干**和一个**可训练的潜在记忆库（Latent Memory Bank）** 组成，实现语言处理与知识存储的解耦。\n\n#### **记忆库与数据流**\n*   **记忆表示**：记忆库管理固定数量的可学习记忆槽 $M \\in \\mathbb{R}^{S \\times D_m}$，其中 $S$ 为槽数，$D_m$ 为记忆维度。\n*   **执行循环**：\n    1.  **提取**：冻结LLM处理输入，生成原始隐藏状态。\n    2.  **检索**：基于当前编码状态查询记忆库。\n    3.  **注入**：检索到的潜在信息被解码，并通过**门控注入层**与原始状态拼接，形成增强隐藏状态，送入LLM的LM头生成logits。\n    4.  **巩固**：编码后的原始隐藏状态通过**交叉注意力**和**门控机制**更新记忆槽。\n\n#### **核心创新：GRU式门控更新**\n为防止记忆漂移和信息覆盖，引入可微分门控 $g$。新记忆状态 $M_{new}$ 计算如下：\n$$ M_{\\text{new}} = (1 - g) \\odot M_{\\text\n{old}} + g \\odot M_{\\text{attended}} $$\n其中 $M_{attended}$ 是交叉注意力结果。该门允许模型**动态决定**保留旧记忆或写入新信息。\n\n#### **训练目标**\n总损失 $L_{total}$ 为加权和：\n1.  **主任务损失**：标准交叉熵损失 $L_{CLM}$。\n2.  **稀疏性损失**：$L1$ 惩罚 $L_{sparsity} = \\frac{1}{M",
+    "source_file": "Xu - 2026 - G-MemLLM Gated latent memory augmentation for long-context reasoning in large language models.pdf-619ddf5c-1e09-4211-adfd-44f609ec6d11.md"
+}

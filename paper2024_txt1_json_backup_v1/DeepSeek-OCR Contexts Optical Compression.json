@@ -1,0 +1,8 @@
+{
+    "is_related_to_agent_memory": true,
+    "has_github_link": true,
+    "title": "DeepSeek-OCR: Contexts Optical Compression",
+    "problem_and_motivation": "LLMs处理长文本面临二次方计算复杂度挑战。现有VLM视觉编码器在处理高分辨率图像时，要么激活内存过高，要么产生过多视觉令牌，无法高效地将文本信息压缩到视觉模态。本文核心假设是：**视觉模态可以作为文本信息的高效压缩媒介**，通过OCR任务建立视觉-文本的压缩-解压缩映射，以探索长上下文压缩的可行性。切入点在于设计一个既能处理高分辨率输入、又能保持低激活内存和少量视觉令牌的编码器。",
+    "core_method": "**核心架构DeepSeek-OCR**由DeepEncoder（编码器）和DeepSeek-3B-MoE（解码器）组成。\n\n**DeepEncoder的数据流与创新**：\n1.  **输入处理**：输入高分辨率图像（如1024×1024）被分割为4096个补丁令牌。\n2.  **窗口注意力阶段**：使用80M参数的SAM-base（窗口注意力主导）进行视觉感知特征提取，保持低激活内存。\n3.  **令牌压缩**：通过一个**2层卷积压缩模块**（每层kernel=3，stride=2，padding=1，通道数从256增至1024）进行16倍下采样，将4096个令牌压缩至256个。\n4.  **全局注意力阶段**：压缩后的令牌输入300M参数的CLIP-large（密集全局注意力）进行视觉知识提取。\n5.  **多分辨率支持**：通过动态位置编码插值，支持多种原生分辨率模式（Tiny:512×512/64令牌，Small:640×640/100令牌，Base:1024×1024/256令牌，Large:1280×1280/400令牌）和动态拼接模式（Gundam: n×640×640局部视图 + 1024×1024全局视图）。\n\n**解码器**：使用DeepSeek-3B-MoE（激活570M参数），从压缩的视觉潜在令牌 \\( \\mathbf{Z} \\in \\mathbb{R}^{n \times d_{\text}latent}} \\) 重建文本表示 \\( \\hat{\\mathbf{X}} \\in \\mathbb{R}^{N \times d_{\text",
+    "source_file": "DeepSeek-OCR Contexts Optical Compression.md"
+}

@@ -1,4 +1,5 @@
 {
     "is_related_to_agent_memory": false,
+    "has_github_link": true,
     "source_file": "Flash-Searcher Fast and Effective Web Agents via DAG-Based Parallel Execution.md"
 }

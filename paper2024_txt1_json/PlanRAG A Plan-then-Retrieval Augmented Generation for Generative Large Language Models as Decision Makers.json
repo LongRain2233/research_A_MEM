@@ -1,4 +1,5 @@
 {
     "is_related_to_agent_memory": false,
+    "has_github_link": true,
     "source_file": "PlanRAG A Plan-then-Retrieval Augmented Generation for Generative Large Language Models as Decision Makers.md"
 }

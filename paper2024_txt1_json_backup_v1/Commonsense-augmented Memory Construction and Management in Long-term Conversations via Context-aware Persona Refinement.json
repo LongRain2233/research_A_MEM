@@ -1,0 +1,9 @@
+{
+    "is_related_to_agent_memory": true,
+    "has_github_link": false,
+    "title": "Commonsense-augmented Memory Construction and Management in Long-term Conversations via Context-aware Persona Refinement",
+    "problem_and_motivation": "在长期对话中，对话系统需要记忆和利用用户的**人物画像（persona）**来生成合适的回复。然而，人工标注的画像句子往往信息量不足且过于简化，限制了回复的多样性和吸引力。现有方法通过常识知识（commonsense）扩展画像，但会引发画像间的**矛盾**（例如“我很懒”和“我每天打扫房间”），尤其是在多轮对话中，矛盾积累会阻碍生成一致的回复。现有基线方法（如NLI-remove）简单地删除矛盾画像，但这不仅损失了信息，也不符合人类性格的**情境依赖性**。本文的核心切入点是：**矛盾画像在考虑其原始对话上下文后，可以转化为富含信息的句子**。本文提出CAFFEINE框架，旨在通过情境感知的精细化策略，将矛盾画像转化为对对话有益的信息源。",
+    "core_method": "CAFFEINE是一个在每轮对话会话结束后运行的**情境感知画像精细化框架**。其核心数据流如下：\n1.  **画像扩展与矛盾检测**：首先使用COMET基于因果关系（如XNEED, XWANT）对原始画像进行常识扩展。然后，使用外部NLI模型（RoBERTa-MNLI）计算所有画像对之间的**矛盾概率δ**。将δ超过阈值μ（文中为0.8）的矛盾对构建为**精细化图G=(V, E)**，节点V为画像，边E的权重为δ。\n2.  **迭代图精细化**：算法迭代处理图G。每次迭代选择**矛盾度总和Σδ最高**的节点p1，及其**矛盾概率δ最高**的邻居节点p2作为处理对象。\n3.  **情境感知精细化策略**：给定矛盾画像对P=(p1, p2)及其来源的对话上下文D=(d1, d2)，使用LLM（ChatGPT）从三种策略中选择一种并生成精细化结果R*：\n    - **策略I：消解（Resolution）**：将两个画像基于上下文合并为一个信息丰富的句子。\n    - **策略II：消歧（Disambiguation）**：为每个画像添加上下文信息，使其含义明确化。\n    - **策略III：保留",
+    "silicontext{": ": ",
+    "source_file": "Commonsense-augmented Memory Construction and Management in Long-term Conversations via Context-aware Persona Refinement.md"
+}

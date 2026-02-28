@@ -1,7 +1,5 @@
 {
-    "is_related_to_agent_memory": true,
-    "title": "A Stitch in Time Saves Nine: Proactive Self-Refinement for Language Models",
-    "problem_and_motivation": "现有LLM的自我优化方法（如Self-Refine、PTR）普遍采用**后验式（post-hoc）**范式，即在完整生成答案后进行多轮迭代修正。这种方法存在三个关键缺陷：1. **时机盲目**：无法在生成过程中动态决定何时需要修正，导致早期错误在后续推理中传播；2. **效率低下**：通常需要预设固定迭代次数，造成不必要的计算开销；3. **依赖外部反馈**：严重依赖外部工具或更强的模型提供反馈信号，成本高昂且难以泛化。本文旨在解决这些问题，核心假设是：通过**强化学习**训练模型在**生成过程中**主动、自适应地决定**是否、何时以及如何**进行自我修正，可以更高效、更自主地提升输出质量。",
-    "core_method": "本文提出**PASR (ProActive Self-Refinement)**，一个基于强化学习的框架，将生成过程建模为马尔可夫决策过程。\n\n#### **核心数据流与动作空间**\n1.  **状态**：在生成的第 \\(i\\) 步，状态 \\(s_i\\) 由输入 \\(x\\) 和已生成的轨迹 \\(z_{1:i-1}\\) 决定。\n2.  **动作**：模型从两个动作中选择：\n    *   **内容生成（Content Generation）**：扩展当前推理轨迹。\n    *   **轨迹优化（Trace Refinement）**：使用 `<refine>` 标签对已生成内容进行修正或补充。\n3.  **结构化输出**：系统提示强制模型使用 `嵌套在 `",
+    "is_related_to_agent_memory": false,
+    "has_github_link": false,
     "source_file": "A Stitch in Time Saves Nine Proactive Self-Refinement for Language Models.md"
 }
