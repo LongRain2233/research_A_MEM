@@ -11,9 +11,10 @@ if sys.platform == "win32":
     sys.stdout.reconfigure(encoding='utf-8')
 
 # ================= 配置区域 =================
-DIR1 = r"D:\research\research_A_MEM\paper2024_txt1_json"
-DIR2 = r"D:\research\research_A_MEM\533_md_json"
-OUTPUT_PATH = r"D:\research\research_A_MEM\docs\All_Papers_Review_with_github.md"
+DIR1 = r"D:\research\paper2024_txt1_json"
+DIR2 = r"D:\research\533_md_json"
+OUTPUT_PATH_WITH_GITHUB = r"D:\research\docs\All_Papers_Review_with_github.md"
+OUTPUT_PATH_WITHOUT_GITHUB = r"D:\research\docs\All_Papers_Review_without_github.md"
 # ============================================
 
 def load_json_file(filepath):
@@ -63,7 +64,8 @@ def format_paper_as_markdown(data, source_dir):
     return md
 
 def main():
-    all_papers = []
+    papers_with_github = []
+    papers_without_github = []
 
     # 处理两个目录
     for dir_path in [DIR1, DIR2]:
@@ -81,31 +83,52 @@ def main():
         for json_file in json_files:
             data = load_json_file(json_file)
             if data and is_agent_memory_related(data):
-                all_papers.append((data, str(dir_path)))
+                # 根据 has_github_link 字段分组
+                if data.get("has_github_link", False):
+                    papers_with_github.append((data, str(dir_path)))
+                else:
+                    papers_without_github.append((data, str(dir_path)))
                 related_count += 1
 
         print(f"   ✅ 其中 {related_count} 篇与 Agent Memory 相关")
 
     # 按标题排序
-    all_papers.sort(key=lambda x: x[0].get("title", ""))
+    papers_with_github.sort(key=lambda x: x[0].get("title", ""))
+    papers_without_github.sort(key=lambda x: x[0].get("title", ""))
 
-    print(f"\n📊 总计找到 {len(all_papers)} 篇相关论文")
+    print(f"\n📊 统计结果:")
+    print(f"   🔗 有 GitHub 链接: {len(papers_with_github)} 篇")
+    print(f"   ❌ 无 GitHub 链接: {len(papers_without_github)} 篇")
+    print(f"   📚 总计: {len(papers_with_github) + len(papers_without_github)} 篇")
 
-    # 生成 Markdown
-    output_dir = os.path.dirname(OUTPUT_PATH)
+    # 生成输出目录
+    output_dir = os.path.dirname(OUTPUT_PATH_WITH_GITHUB)
     if output_dir:
         os.makedirs(output_dir, exist_ok=True)
 
-    with open(OUTPUT_PATH, 'w', encoding='utf-8') as f:
-        f.write("# 📚 Agent Memory 论文综述\n\n")
-        f.write(f"共 {len(all_papers)} 篇相关论文\n\n")
+    # 生成有 GitHub 链接的文档
+    with open(OUTPUT_PATH_WITH_GITHUB, 'w', encoding='utf-8') as f:
+        f.write("# 📚 Agent Memory 论文综述 (🔗 含 GitHub 链接)\n\n")
+        f.write(f"共 {len(papers_with_github)} 篇相关论文\n\n")
         f.write("---\n\n")
 
-        for data, source_dir in all_papers:
+        for data, source_dir in papers_with_github:
             md = format_paper_as_markdown(data, source_dir)
             f.write(md)
 
-    print(f"\n✅ 已生成合并文档: {OUTPUT_PATH}")
+    print(f"\n✅ 已生成文档 (有 GitHub): {OUTPUT_PATH_WITH_GITHUB}")
+
+    # 生成无 GitHub 链接的文档
+    with open(OUTPUT_PATH_WITHOUT_GITHUB, 'w', encoding='utf-8') as f:
+        f.write("# 📚 Agent Memory 论文综述 (❌ 无 GitHub 链接)\n\n")
+        f.write(f"共 {len(papers_without_github)} 篇相关论文\n\n")
+        f.write("---\n\n")
+
+        for data, source_dir in papers_without_github:
+            md = format_paper_as_markdown(data, source_dir)
+            f.write(md)
+
+    print(f"✅ 已生成文档 (无 GitHub): {OUTPUT_PATH_WITHOUT_GITHUB}")
 
 if __name__ == "__main__":
     main()

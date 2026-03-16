@@ -1,0 +1,20 @@
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "https://openrouter.ai/api",
+    "ANTHROPIC_AUTH_TOKEN": "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",
+    "ANTHROPIC_API_KEY": "",
+    "http_proxy": "http://127.0.0.1:7890",
+    "https_proxy": "http://127.0.0.1:7890",
+    "ANTHROPIC_OPUS_MODEL": "anthropic/claude-sonnet-4.6"
+  },
+  "permissions": {
+    "allow": [
+      "Bash(xargs ls:*)",
+      "Bash(grep:*)",
+      "Bash(python:*)",
+      "Bash(pip install:*)",
+      "Bash(conda run:*)",
+      "Bash(powershell:*)"
+    ]
+  }
+}

@@ -1,0 +1,41 @@
+=== 数据集概览 ===
+总条目数: 10
+
+=== 字段结构 ===
+  - qa: list (长度: 199)
+  - conversation: dict
+  - event_summary: dict
+  - observation: dict
+  - session_summary: dict
+  - sample_id: str
+
+=== qa 字段详情 ===
+每个条目包含 199 个问答对
+每个问答对包含以下字段:
+  - question
+  - answer
+  - evidence
+  - category
+
+=== category 类别说明 ===
+类别分布: {2: 321, 3: 96, 1: 282, 4: 841, 5: 446}
+含义: 1=显式事实, 2=隐式事实, 3=推理, 4=时间理解, 5=其他
+
+=== 查看其他字段 ===
+
+- sample_id: conv-26
+
+- conversation 字段的键: ['speaker_a', 'speaker_b', 'session_1_date_time', 'session_1', 'session_2_date_time', 'session_2', 'session_3_date_time', 'session_3', 'session_4_date_time', 'session_4', 'session_5_date_time', 'session_5', 'session_6_date_time', 'session_6', 'session_7_date_time', 'session_7', 'session_8_date_time', 'session_8', 'session_9_date_time', 'session_9', 'session_10_date_time', 'session_10', 'session_11_date_time', 'session_11', 'session_12_date_time', 'session_12', 'session_13_date_time', 'session_13', 'session_14_date_time', 'session_14', 'session_15_date_time', 'session_15', 'session_16_date_time', 'session_16', 'session_17_date_time', 'session_17', 'session_18_date_time', 'session_18', 'session_19_date_time', 'session_19', 'session_20_date_time', 'session_21_date_time', 'session_22_date_time', 'session_23_date_time', 'session_24_date_time', 'session_25_date_time', 'session_26_date_time', 'session_27_date_time', 'session_28_date_time', 'session_29_date_time', 'session_30_date_time', 'session_31_date_time', 'session_32_date_time', 'session_33_date_time', 'session_34_date_time', 'session_35_date_time']
+
+- event_summary 字段的键: ['events_session_1', 'events_session_2', 'events_session_3', 'events_session_4', 'events_session_5', 'events_session_6', 'events_session_7', 'events_session_8', 'events_session_9', 'events_session_10', 'events_session_11', 'events_session_12', 'events_session_13', 'events_session_14', 'events_session_15', 'events_session_16', 'events_session_17', 'events_session_18', 'events_session_19']
+
+- observation 字段的键: ['session_1_observation', 'session_2_observation', 'session_3_observation', 'session_4_observation', 'session_5_observation', 'session_6_observation', 'session_7_observation', 'session_8_observation', 'session_9_observation', 'session_10_observation', 'session_11_observation', 'session_12_observation', 'session_13_observation', 'session_14_observation', 'session_15_observation', 'session_16_observation', 'session_17_observation', 'session_18_observation', 'session_19_observation']
+
+- session_summary 字段的键: ['session_1_summary', 'session_2_summary', 'session_3_summary', 'session_4_summary', 'session_5_summary', 'session_6_summary', 'session_7_summary', 'session_8_summary', 'session_9_summary', 'session_10_summary', 'session_11_summary', 'session_12_summary', 'session_13_summary', 'session_14_summary', 'session_15_summary', 'session_16_summary', 'session_17_summary', 'session_18_summary', 'session_19_summary']
+
+=== conversation 内容示例 ===
+  speaker_a: Caroline...
+  speaker_b: Melanie...
+  session_1_date_time: 1:56 pm on 8 May, 2023...
+  session_1: [{'speaker': 'Caroline', 'dia_id': 'D1:1', 'text': 'Hey Mel! Good to see you! How have you been?'}, {'speaker': 'Melanie', 'dia_id': 'D1:2', 'text': "...
+  session_2_date_time: 1:14 pm on 25 May, 2023...

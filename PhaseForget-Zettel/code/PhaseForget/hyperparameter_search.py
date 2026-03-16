@@ -1,0 +1,495 @@
+"""
+PhaseForget-Zettel 超参数自动搜索脚本
+=====================================
+
+功能：
+  1. 支持只选 locomo10.json 中部分记录（通过 --record-indices 参数）
+  2. 自动网格搜索 / 随机搜索三个最重要的超参数：
+       - theta_sim   (拓扑邻居相似度阈值)
+       - theta_sum   (证据池触发重整化阈值)
+       - theta_evict (低效笔记驱逐阈值)
+  3. 每次搜索使用独立的 experiment_id，数据完全隔离
+  4. 结果自动保存到 data/hparam_search_results.json 并打印排行榜
+
+典型用法：
+  # 快速搜索：只用记录 0 和 1，网格搜索
+  python hyperparameter_search.py --record-indices 0,1 --search-type grid
+
+  # 随机搜索：用前3条记录，搜索20组组合
+  python hyperparameter_search.py --record-indices 0,1,2 --search-type random --n-trials 20
+
+  # 指定参数范围（覆盖默认值）
+  python hyperparameter_search.py --record-indices 0 \\
+      --theta-sim-values 0.5,0.65,0.8 \\
+      --theta-sum-values 3,5,8 \\
+      --theta-evict-values 0.2,0.35,0.5
+
+  # 查看帮助
+  python hyperparameter_search.py --help
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import itertools
+import json
+import logging
+import os
+import random
+import shutil
+import sys
+import time
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+
+# ── 确保 src 在路径中 ───────────────────────────────────────────────────────
+_ROOT = Path(__file__).parent
+sys.path.insert(0, str(_ROOT / "src"))
+
+logger = logging.getLogger("hparam_search")
+
+
+# ── 默认搜索空间（较大步长，用于快速定位合理区间）────────────────────────────
+
+DEFAULT_THETA_SIM_VALUES = [0.5, 0.65, 0.75, 0.85]
+DEFAULT_THETA_SUM_VALUES = [3, 5, 8, 12]
+DEFAULT_THETA_EVICT_VALUES = [0.15, 0.3, 0.45, 0.6]
+
+
+# ── 结果存储路径 ────────────────────────────────────────────────────────────
+
+RESULTS_PATH = _ROOT / "data" / "hparam_search_results.json"
+
+
+def _load_existing_results() -> list[dict]:
+    if RESULTS_PATH.exists():
+        try:
+            with open(RESULTS_PATH, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return []
+    return []
+
+
+def _save_results(results: list[dict]) -> None:
+    RESULTS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with open(RESULTS_PATH, "w", encoding="utf-8") as f:
+        json.dump(results, f, indent=2, ensure_ascii=False)
+
+
+def _composite_score(metrics: dict) -> float:
+    """
+    综合评分 = 0.4*F1 + 0.3*ROUGE-L + 0.2*METEOR + 0.1*BLEU
+    聚焦于最能反映记忆质量的指标组合。
+    """
+    return (
+        0.4 * metrics.get("avg_f1", 0.0)
+        + 0.3 * metrics.get("avg_rouge_l", 0.0)
+        + 0.2 * metrics.get("avg_meteor", 0.0)
+        + 0.1 * metrics.get("avg_bleu", 0.0)
+    )
+
+
+async def run_single_trial(
+    theta_sim: float,
+    theta_sum: int,
+    theta_evict: float,
+    record_indices: list[int],
+    data_path: str,
+    trial_id: str,
+    extra_env: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """
+    运行单次超参数组合的实验，返回评估结果字典。
+
+    使用独立的 experiment_id 隔离数据，实验结束后清理临时存储。
+    """
+    from phaseforget.config.settings import Settings
+    from phaseforget.pipeline.orchestrator import PhaseForgetSystem
+    from phaseforget.evaluation.loaders.locomo import LoCoMoLoader
+    from phaseforget.evaluation.benchmark import BenchmarkRunner
+    from phaseforget.utils.logger import setup_logging
+
+    experiment_id = f"hps_{trial_id}"
+    base_data = _ROOT / "data" / experiment_id
+
+    # 构造 Settings（直接注入超参数，不依赖 .env）
+    env_overrides = {
+        "EXPERIMENT_ID": experiment_id,
+        "THETA_SIM": str(theta_sim),
+        "THETA_SUM": str(theta_sum),
+        "THETA_EVICT": str(theta_evict),
+        "CHROMA_PERSIST_DIR": f"./data/{experiment_id}/chroma_db",
+        "SQLITE_DB_PATH": f"./data/{experiment_id}/phaseforget.db",
+        "LOG_LEVEL": "WARNING",
+        "LOG_FILE": f"./data/{experiment_id}/phaseforget.log",
+    }
+    if extra_env:
+        env_overrides.update(extra_env)
+
+    old_env = {}
+    for k, v in env_overrides.items():
+        old_env[k] = os.environ.get(k)
+        os.environ[k] = v
+
+    start_time = time.time()
+    result_metrics = {}
+
+    try:
+        settings = Settings(
+            experiment_id=experiment_id,
+            theta_sim=theta_sim,
+            theta_sum=theta_sum,
+            theta_evict=theta_evict,
+            chroma_persist_dir=f"./data/{experiment_id}/chroma_db",
+            sqlite_db_path=f"./data/{experiment_id}/phaseforget.db",
+            log_level="WARNING",
+            log_file=f"./data/{experiment_id}/phaseforget.log",
+        )
+
+        system = PhaseForgetSystem(settings=settings)
+        await system.initialize()
+
+        loader = LoCoMoLoader(record_indices=record_indices)
+        ckpt_path = str(base_data / "bench_checkpoint.json")
+        runner = BenchmarkRunner(
+            system,
+            llm_client=system._llm,
+            checkpoint_path=ckpt_path,
+        )
+
+        bench_results = await runner.run(
+            dataset_loader=loader,
+            dataset_path=data_path,
+        )
+
+        pf = bench_results.get("PhaseForget")
+        if pf:
+            result_metrics = {
+                "avg_f1": pf.avg_f1,
+                "avg_bleu": pf.avg_bleu,
+                "avg_rouge_l": pf.avg_rouge_l,
+                "avg_rouge2": pf.avg_rouge2,
+                "avg_meteor": pf.avg_meteor,
+                "avg_sbert": pf.avg_sbert,
+                "avg_retrieval_time_us": pf.avg_retrieval_time_us,
+                "n_questions": len(pf.f1_scores),
+            }
+
+        await system.close()
+
+    except Exception as e:
+        logger.error(f"Trial {trial_id} failed: {e}", exc_info=True)
+        result_metrics = {"error": str(e)}
+
+    finally:
+        # 恢复环境变量
+        for k, old_v in old_env.items():
+            if old_v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = old_v
+
+        # 清理临时实验数据
+        if base_data.exists():
+            try:
+                shutil.rmtree(base_data)
+            except Exception as e:
+                logger.warning(f"Failed to clean up {base_data}: {e}")
+
+    elapsed = time.time() - start_time
+    return {
+        "trial_id": trial_id,
+        "params": {
+            "theta_sim": theta_sim,
+            "theta_sum": theta_sum,
+            "theta_evict": theta_evict,
+        },
+        "record_indices": record_indices,
+        "metrics": result_metrics,
+        "composite_score": _composite_score(result_metrics),
+        "elapsed_seconds": round(elapsed, 1),
+        "timestamp": datetime.now().isoformat(),
+    }
+
+
+def build_grid(
+    theta_sim_values: list[float],
+    theta_sum_values: list[int],
+    theta_evict_values: list[float],
+) -> list[dict]:
+    """生成笛卡尔积网格搜索参数组合列表。"""
+    combos = []
+    for ts, tsum, te in itertools.product(theta_sim_values, theta_sum_values, theta_evict_values):
+        combos.append({"theta_sim": ts, "theta_sum": tsum, "theta_evict": te})
+    return combos
+
+
+def build_random(
+    theta_sim_values: list[float],
+    theta_sum_values: list[int],
+    theta_evict_values: list[float],
+    n_trials: int,
+    seed: int = 42,
+) -> list[dict]:
+    """随机采样参数组合。"""
+    rng = random.Random(seed)
+    all_combos = build_grid(theta_sim_values, theta_sum_values, theta_evict_values)
+    if n_trials >= len(all_combos):
+        return all_combos
+    return rng.sample(all_combos, n_trials)
+
+
+def print_leaderboard(results: list[dict], top_n: int = 10) -> None:
+    """打印超参数搜索结果排行榜。"""
+    valid = [r for r in results if "error" not in r.get("metrics", {})]
+    if not valid:
+        print("暂无有效结果。")
+        return
+
+    sorted_results = sorted(valid, key=lambda x: x["composite_score"], reverse=True)
+
+    print("\n" + "=" * 100)
+    print(f"  超参数搜索排行榜 (Top {min(top_n, len(sorted_results))})")
+    print("=" * 100)
+    print(
+        f"{'排名':<4} {'theta_sim':>10} {'theta_sum':>10} {'theta_evict':>12} "
+        f"{'综合分':>8} {'F1':>8} {'ROUGE-L':>8} {'METEOR':>8} {'BLEU':>8} "
+        f"{'样本数':>6} {'耗时(s)':>8}"
+    )
+    print("-" * 100)
+
+    for rank, r in enumerate(sorted_results[:top_n], 1):
+        p = r["params"]
+        m = r["metrics"]
+        print(
+            f"{rank:<4} {p['theta_sim']:>10.2f} {p['theta_sum']:>10} {p['theta_evict']:>12.2f} "
+            f"{r['composite_score']:>8.4f} {m.get('avg_f1', 0):>8.4f} "
+            f"{m.get('avg_rouge_l', 0):>8.4f} {m.get('avg_meteor', 0):>8.4f} "
+            f"{m.get('avg_bleu', 0):>8.4f} {m.get('n_questions', 0):>6} "
+            f"{r.get('elapsed_seconds', 0):>8.1f}"
+        )
+
+    print("=" * 100)
+
+    if sorted_results:
+        best = sorted_results[0]
+        bp = best["params"]
+        print(f"\n最佳超参数组合（综合分 {best['composite_score']:.4f}）：")
+        print(f"  theta_sim   = {bp['theta_sim']}")
+        print(f"  theta_sum   = {bp['theta_sum']}")
+        print(f"  theta_evict = {bp['theta_evict']}")
+        print(f"\n对应的 .env 配置：")
+        print(f"  THETA_SIM={bp['theta_sim']}")
+        print(f"  THETA_SUM={bp['theta_sum']}")
+        print(f"  THETA_EVICT={bp['theta_evict']}")
+        print()
+
+
+async def main_async(args: argparse.Namespace) -> None:
+    # 解析 record_indices
+    record_indices: list[int] | None = None
+    if args.record_indices:
+        try:
+            record_indices = [int(x.strip()) for x in args.record_indices.split(",")]
+        except ValueError:
+            print(f"[ERROR] --record-indices 必须是逗号分隔的整数，收到: {args.record_indices}")
+            sys.exit(1)
+
+    # 解析超参数搜索范围
+    def parse_floats(s: str) -> list[float]:
+        return [float(x.strip()) for x in s.split(",")]
+
+    def parse_ints(s: str) -> list[int]:
+        return [int(x.strip()) for x in s.split(",")]
+
+    theta_sim_values = parse_floats(args.theta_sim_values) if args.theta_sim_values else DEFAULT_THETA_SIM_VALUES
+    theta_sum_values = parse_ints(args.theta_sum_values) if args.theta_sum_values else DEFAULT_THETA_SUM_VALUES
+    theta_evict_values = parse_floats(args.theta_evict_values) if args.theta_evict_values else DEFAULT_THETA_EVICT_VALUES
+
+    # 构建参数组合
+    if args.search_type == "grid":
+        combos = build_grid(theta_sim_values, theta_sum_values, theta_evict_values)
+    else:
+        combos = build_random(
+            theta_sim_values, theta_sum_values, theta_evict_values,
+            n_trials=args.n_trials, seed=args.seed
+        )
+
+    total = len(combos)
+    print(f"\n{'='*60}")
+    print(f"  PhaseForget 超参数搜索")
+    print(f"{'='*60}")
+    print(f"  搜索模式     : {args.search_type}")
+    print(f"  参数组合数   : {total}")
+    print(f"  theta_sim    : {theta_sim_values}")
+    print(f"  theta_sum    : {theta_sum_values}")
+    print(f"  theta_evict  : {theta_evict_values}")
+    print(f"  数据集记录   : {record_indices if record_indices else '全部(0-9)'}")
+    print(f"  数据集路径   : {args.data_path}")
+    print(f"  结果保存至   : {RESULTS_PATH}")
+    print(f"{'='*60}\n")
+
+    # 加载已有结果（支持断点续搜）
+    all_results = _load_existing_results()
+    completed_keys = {
+        (r["params"]["theta_sim"], r["params"]["theta_sum"], r["params"]["theta_evict"])
+        for r in all_results
+        if r.get("record_indices") == record_indices
+    }
+
+    pending = [
+        c for c in combos
+        if (c["theta_sim"], c["theta_sum"], c["theta_evict"]) not in completed_keys
+    ]
+    skipped = total - len(pending)
+    if skipped > 0:
+        print(f"[断点续搜] 已跳过 {skipped} 组已完成的组合，剩余 {len(pending)} 组。\n")
+
+    for trial_num, combo in enumerate(pending, skipped + 1):
+        ts, tsum, te = combo["theta_sim"], combo["theta_sum"], combo["theta_evict"]
+        trial_id = f"{ts:.2f}_{tsum}_{te:.2f}_{int(time.time())}"
+
+        print(
+            f"[{trial_num}/{total}] theta_sim={ts} theta_sum={tsum} theta_evict={te} "
+            f"  开始时间: {datetime.now().strftime('%H:%M:%S')}"
+        )
+
+        result = await run_single_trial(
+            theta_sim=ts,
+            theta_sum=tsum,
+            theta_evict=te,
+            record_indices=record_indices,
+            data_path=args.data_path,
+            trial_id=trial_id,
+        )
+
+        all_results.append(result)
+        _save_results(all_results)
+
+        if "error" in result.get("metrics", {}):
+            print(f"  [FAILED] {result['metrics']['error']}")
+        else:
+            m = result["metrics"]
+            print(
+                f"  综合分={result['composite_score']:.4f}  "
+                f"F1={m.get('avg_f1', 0):.4f}  "
+                f"ROUGE-L={m.get('avg_rouge_l', 0):.4f}  "
+                f"METEOR={m.get('avg_meteor', 0):.4f}  "
+                f"耗时={result['elapsed_seconds']}s"
+            )
+
+    print("\n所有实验完成！")
+    print_leaderboard(all_results)
+    print(f"完整结果已保存到: {RESULTS_PATH}\n")
+
+
+def main() -> None:
+    logging.basicConfig(
+        level=logging.WARNING,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    )
+
+    parser = argparse.ArgumentParser(
+        description="PhaseForget-Zettel 超参数自动搜索工具",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=__doc__,
+    )
+
+    # ── 数据集参数 ────────────────────────────────────────────────────────
+    parser.add_argument(
+        "--data-path",
+        default="dataset/locomo10.json",
+        help="locomo10.json 路径（默认: dataset/locomo10.json）",
+    )
+    parser.add_argument(
+        "--record-indices",
+        type=str,
+        default=None,
+        help=(
+            "逗号分隔的记录索引（0-9），例如 '0,1,2'。"
+            "不指定则使用全部10条记录。"
+            "建议快速搜索时只用1-2条记录。"
+        ),
+    )
+
+    # ── 搜索策略 ──────────────────────────────────────────────────────────
+    parser.add_argument(
+        "--search-type",
+        choices=["grid", "random"],
+        default="grid",
+        help="搜索类型：grid=网格搜索（全覆盖），random=随机搜索（默认: grid）",
+    )
+    parser.add_argument(
+        "--n-trials",
+        type=int,
+        default=12,
+        help="随机搜索时的试验次数（默认: 12，仅 --search-type random 有效）",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="随机搜索的随机种子（默认: 42）",
+    )
+
+    # ── 超参数搜索空间 ────────────────────────────────────────────────────
+    parser.add_argument(
+        "--theta-sim-values",
+        type=str,
+        default=None,
+        help=f"theta_sim 候选值，逗号分隔（默认: {','.join(map(str, DEFAULT_THETA_SIM_VALUES))}）",
+    )
+    parser.add_argument(
+        "--theta-sum-values",
+        type=str,
+        default=None,
+        help=f"theta_sum 候选值，逗号分隔（默认: {','.join(map(str, DEFAULT_THETA_SUM_VALUES))}）",
+    )
+    parser.add_argument(
+        "--theta-evict-values",
+        type=str,
+        default=None,
+        help=f"theta_evict 候选值，逗号分隔（默认: {','.join(map(str, DEFAULT_THETA_EVICT_VALUES))}）",
+    )
+
+    # ── 工具命令 ──────────────────────────────────────────────────────────
+    parser.add_argument(
+        "--show-results",
+        action="store_true",
+        help="只显示已有的搜索结果排行榜，不运行新实验",
+    )
+    parser.add_argument(
+        "--clear-results",
+        action="store_true",
+        help="清除已保存的搜索结果（谨慎使用）",
+    )
+
+    args = parser.parse_args()
+
+    if args.clear_results:
+        if RESULTS_PATH.exists():
+            RESULTS_PATH.unlink()
+            print(f"已清除结果文件: {RESULTS_PATH}")
+        else:
+            print("结果文件不存在，无需清除。")
+        return
+
+    if args.show_results:
+        results = _load_existing_results()
+        if not results:
+            print("尚无搜索结果。请先运行实验。")
+        else:
+            print_leaderboard(results)
+        return
+
+    # 切换到脚本所在目录（确保相对路径正确）
+    os.chdir(_ROOT)
+
+    asyncio.run(main_async(args))
+
+
+if __name__ == "__main__":
+    main()
