@@ -75,10 +75,17 @@ class LoCoMoLoader(DatasetLoader):
             e.g. [0, 2, 4] loads only the 1st, 3rd, 5th records.
             None (default) loads all records.
             locomo10.json has 10 records (indices 0-9).
+        include_adversarial: Whether to include category-5 adversarial QA.
+            Default False to follow common LoCoMo evaluation protocol.
     """
 
-    def __init__(self, record_indices: list[int] | None = None):
+    def __init__(
+        self,
+        record_indices: list[int] | None = None,
+        include_adversarial: bool = False,
+    ):
         self._record_indices = record_indices
+        self._include_adversarial = include_adversarial
 
     def name(self) -> str:
         return "LoCoMo"
@@ -148,13 +155,17 @@ class LoCoMoLoader(DatasetLoader):
     ) -> list[dict[str, Any]]:
         """Parse one top-level LoCoMo record into benchmark sessions."""
 
-        # ── 1. Extract QA (exclude adversarial category 5) ───────────────
+        # ── 1. Extract QA (category 5 excluded by default) ───────────────
         questions = []
         for qa in record.get("qa", []):
             category = qa.get("category", 0)
-            if category == 5:
+            if category == 5 and not self._include_adversarial:
                 continue  # adversarial — answer is intentionally wrong
+
             answer = qa.get("answer")
+            # Some LoCoMo variants keep category-5 labels in adversarial_answer.
+            if category == 5 and answer is None:
+                answer = qa.get("adversarial_answer")
             if answer is None:
                 continue
             questions.append({

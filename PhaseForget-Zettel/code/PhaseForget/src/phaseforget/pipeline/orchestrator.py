@@ -233,13 +233,70 @@ class PhaseForgetSystem:
             List of matching notes with scores.
         """
         k = top_k or self._settings.retrieval_top_k
-        # Use search_min_similarity (default 0.0) for user-facing search.
-        # theta_sim is reserved for internal topology filtering only.
         return self._cold.search(
             query_text=query,
             top_k=k,
             min_similarity=self._settings.search_min_similarity or None,
         )
+
+    async def search_with_graph(
+        self,
+        query: str,
+        top_k: Optional[int] = None,
+    ) -> list[dict]:
+        """
+        Search with link-graph expansion (aligned with A-MEM find_related_memories_raw).
+
+        1. ChromaDB Top-K semantic recall.
+        2. For each hit, fetch first-degree neighbors from the Zettel link topology.
+        3. Retrieve neighbor content from ChromaDB.
+        4. Merge and deduplicate, preserving original Top-K order first.
+
+        This restores the graph traversal capability that A-MEM uses at QA time.
+        """
+        k = top_k or self._settings.retrieval_top_k
+        seed_hits = self._cold.search(
+            query_text=query,
+            top_k=k,
+            min_similarity=self._settings.search_min_similarity or None,
+        )
+
+        if not seed_hits:
+            return []
+
+        seen_ids: set[str] = set()
+        ordered_results: list[dict] = []
+
+        for hit in seed_hits:
+            hid = hit["id"]
+            if hid not in seen_ids:
+                seen_ids.add(hid)
+                ordered_results.append(hit)
+
+        neighbor_ids_to_fetch: list[str] = []
+        for hit in seed_hits:
+            try:
+                neighbors = await self._hot.get_first_degree_neighbors(hit["id"])
+                for nid in neighbors:
+                    if nid not in seen_ids:
+                        seen_ids.add(nid)
+                        neighbor_ids_to_fetch.append(nid)
+            except Exception as e:
+                logger.debug(f"Graph expansion failed for {hit['id']}: {e}")
+
+        if neighbor_ids_to_fetch:
+            neighbor_notes = self._cold.get_by_ids(neighbor_ids_to_fetch)
+            for note_data in neighbor_notes:
+                content = note_data.get("content", "")
+                metadata = note_data.get("metadata", {})
+                ordered_results.append({
+                    "id": note_data["id"],
+                    "score": 0.0,
+                    "content": content,
+                    "metadata": metadata,
+                })
+
+        return ordered_results
 
     async def get_stats(self) -> dict:
         """Get system statistics (all values read from persistent storage)."""

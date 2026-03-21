@@ -59,8 +59,9 @@ DEFAULT_THETA_EVICT_VALUES = [0.15, 0.3, 0.45, 0.6]
 
 
 # ── 结果存储路径 ────────────────────────────────────────────────────────────
-
-RESULTS_PATH = _ROOT / "data" / "hparam_search_results.json"
+# 默认路径，可以通过 --output 参数覆盖
+DEFAULT_RESULTS_PATH = _ROOT / "data" / "hparam_search_results.json"
+RESULTS_PATH: Path = DEFAULT_RESULTS_PATH
 
 
 def _load_existing_results() -> list[dict]:
@@ -99,6 +100,7 @@ async def run_single_trial(
     record_indices: list[int],
     data_path: str,
     trial_id: str,
+    include_adversarial: bool = False,
     extra_env: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """
@@ -152,7 +154,10 @@ async def run_single_trial(
         system = PhaseForgetSystem(settings=settings)
         await system.initialize()
 
-        loader = LoCoMoLoader(record_indices=record_indices)
+        loader = LoCoMoLoader(
+            record_indices=record_indices,
+            include_adversarial=include_adversarial,
+        )
         ckpt_path = str(base_data / "bench_checkpoint.json")
         runner = BenchmarkRunner(
             system,
@@ -328,6 +333,7 @@ async def main_async(args: argparse.Namespace) -> None:
     print(f"  theta_sum    : {theta_sum_values}")
     print(f"  theta_evict  : {theta_evict_values}")
     print(f"  数据集记录   : {record_indices if record_indices else '全部(0-9)'}")
+    print(f"  包含对抗题   : {args.include_adversarial}")
     print(f"  数据集路径   : {args.data_path}")
     print(f"  结果保存至   : {RESULTS_PATH}")
     print(f"{'='*60}\n")
@@ -364,6 +370,7 @@ async def main_async(args: argparse.Namespace) -> None:
             record_indices=record_indices,
             data_path=args.data_path,
             trial_id=trial_id,
+            include_adversarial=args.include_adversarial,
         )
 
         all_results.append(result)
@@ -412,6 +419,14 @@ def main() -> None:
             "逗号分隔的记录索引（0-9），例如 '0,1,2'。"
             "不指定则使用全部10条记录。"
             "建议快速搜索时只用1-2条记录。"
+        ),
+    )
+    parser.add_argument(
+        "--include-adversarial",
+        action="store_true",
+        help=(
+            "是否在 LoCoMo 评估中包含 category=5 的对抗问题。"
+            "默认不包含（遵循常见协议）。"
         ),
     )
 
@@ -466,8 +481,25 @@ def main() -> None:
         action="store_true",
         help="清除已保存的搜索结果（谨慎使用）",
     )
+    parser.add_argument(
+        "--output",
+        type=str,
+        default=None,
+        help=(
+            "自定义结果文件保存路径（默认: data/hparam_search_results.json）。"
+            "例如: --output experiments/run_1/results.json"
+        ),
+    )
 
     args = parser.parse_args()
+
+    # 处理自定义输出路径
+    global RESULTS_PATH
+    if args.output:
+        RESULTS_PATH = Path(args.output)
+        # 如果是相对路径，基于项目根目录
+        if not RESULTS_PATH.is_absolute():
+            RESULTS_PATH = _ROOT / RESULTS_PATH
 
     if args.clear_results:
         if RESULTS_PATH.exists():

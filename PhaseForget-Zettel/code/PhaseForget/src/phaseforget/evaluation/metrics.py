@@ -24,6 +24,7 @@ class EvalMetrics:
     sbert_scores: list[float] = field(default_factory=list)
     retrieval_times_us: list[float] = field(default_factory=list)
     memory_usage_mb: list[float] = field(default_factory=list)
+    by_category: dict[int, "EvalMetrics"] = field(default_factory=dict, repr=False)
 
     @property
     def avg_f1(self) -> float:
@@ -56,6 +57,52 @@ class EvalMetrics:
             if self.retrieval_times_us
             else 0.0
         )
+
+    def category_metrics(self, category: int) -> "EvalMetrics":
+        """Get or create metric bucket for a QA category."""
+        if category not in self.by_category:
+            self.by_category[category] = EvalMetrics()
+        return self.by_category[category]
+
+    def to_dict(self, include_categories: bool = True) -> dict:
+        """Serialize metrics for checkpoint persistence."""
+        data = {
+            "f1_scores": self.f1_scores,
+            "bleu_scores": self.bleu_scores,
+            "rouge_l_scores": self.rouge_l_scores,
+            "rouge2_scores": self.rouge2_scores,
+            "meteor_scores": self.meteor_scores,
+            "sbert_scores": self.sbert_scores,
+            "retrieval_times_us": self.retrieval_times_us,
+            "memory_usage_mb": self.memory_usage_mb,
+        }
+        if include_categories and self.by_category:
+            data["by_category"] = {
+                str(cat): m.to_dict(include_categories=False)
+                for cat, m in sorted(self.by_category.items())
+            }
+        return data
+
+    @classmethod
+    def from_dict(cls, raw: dict) -> "EvalMetrics":
+        """Restore metrics from checkpoint payload."""
+        m = cls()
+        m.f1_scores = raw.get("f1_scores", [])
+        m.bleu_scores = raw.get("bleu_scores", [])
+        m.rouge_l_scores = raw.get("rouge_l_scores", [])
+        m.rouge2_scores = raw.get("rouge2_scores", [])
+        m.meteor_scores = raw.get("meteor_scores", [])
+        m.sbert_scores = raw.get("sbert_scores", [])
+        m.retrieval_times_us = raw.get("retrieval_times_us", [])
+        m.memory_usage_mb = raw.get("memory_usage_mb", [])
+
+        for cat_raw, cat_data in raw.get("by_category", {}).items():
+            try:
+                cat = int(cat_raw)
+            except (TypeError, ValueError):
+                continue
+            m.by_category[cat] = cls.from_dict(cat_data)
+        return m
 
 
 def compute_f1(prediction: str, reference: str) -> float:

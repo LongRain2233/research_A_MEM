@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import random
 import sys
 import time
 from abc import ABC, abstractmethod
@@ -39,16 +40,34 @@ from phaseforget.evaluation.metrics import (
 
 logger = logging.getLogger(__name__)
 
-# Prompt template for LLM-based answer generation
-_ANSWER_PROMPT = """\
-Based on the following memory fragments from a conversation, answer the question as concisely as possible (1 sentence or a few words).
+# ── Prompt Templates (aligned with A-MEM evaluation protocol) ──────────
 
-Memory fragments:
-{context}
-
+_QUERY_EXPANSION_PROMPT = """\
+Given the following question, generate several search keywords separated by commas.
 Question: {question}
+Output a JSON object: {{"keywords": "keyword1, keyword2, keyword3"}}"""
 
-Answer:"""
+_ANSWER_PROMPT_DEFAULT = """\
+Based on the context: {context}, write an answer in the form of a short phrase for the following question. Answer with exact words from the context whenever possible.
+
+Question: {question} Short answer:
+
+Respond with a JSON object: {{"answer": "<your short answer>"}}"""
+
+_ANSWER_PROMPT_TEMPORAL = """\
+Based on the context: {context}, answer the following question. Use DATE of CONVERSATION to answer with an approximate date.
+Please generate the shortest possible answer, using words from the conversation where possible, and avoid using any subjects.
+
+Question: {question} Short answer:
+
+Respond with a JSON object: {{"answer": "<your short answer>"}}"""
+
+_ANSWER_PROMPT_ADVERSARIAL = """\
+Based on the context: {context}, answer the following question. {question}
+
+Select the correct answer: {option_a} or {option_b}  Short answer:
+
+Respond with a JSON object: {{"answer": "<selected answer>"}}"""
 
 
 class DatasetLoader(ABC):
@@ -159,36 +178,113 @@ class BenchmarkRunner:
                 logger.warning(f"Failed to load SBERT model, SBERT scores will be 0: {e}")
         return self._sbert_model
 
-    async def _generate_answer(self, question: str, retrieved: list[dict]) -> str:
+    async def _expand_query(self, question: str) -> str:
+        """Extract search keywords from a question via LLM (A-MEM protocol)."""
+        if self._llm_client is None:
+            return question
+        try:
+            result = await self._llm_client.generate_json(
+                _QUERY_EXPANSION_PROMPT.format(question=question),
+                system_prompt="You must respond with a JSON object.",
+                temperature=0.1,
+                max_tokens=256,
+            )
+            keywords = result.get("keywords", "")
+            if keywords and keywords.strip():
+                return keywords.strip()
+        except Exception as e:
+            logger.debug(f"Query expansion failed, using raw question: {e}")
+        return question
+
+    async def _generate_answer(
+        self,
+        question: str,
+        retrieved: list[dict],
+        category: int | None = None,
+        reference: str = "",
+    ) -> str:
         """
         Generate answer using LLM with retrieved memories as context.
-        Falls back to concatenating retrieved text if LLM is unavailable.
+
+        Implements category-specific prompt engineering aligned with A-MEM:
+            - Category 2 (temporal): instruct model to use conversation dates
+            - Category 5 (adversarial): binary choice format
+            - Default: short-phrase answer using exact context words
         """
         if not retrieved:
             return ""
 
-        context = "\n".join(
-            f"[{i + 1}] {r.get('content', '')}"
-            for i, r in enumerate(retrieved[:5])
-        )
+        # Build context aligned with A-MEM's memory_str format:
+        # "talk start time:<ts> memory content:<c> memory context:<ctx> memory keywords:<kw> memory tags:<tags>"
+        ctx_lines = []
+        for r in retrieved:
+            meta = r.get("metadata", {})
+            raw_content = meta.get("content", r.get("content", ""))
+            ctx_summary = meta.get("context", "")
+            # keywords/tags may be list (deserialized) or str; normalize to str
+            kw_raw = meta.get("keywords", "")
+            tags_raw = meta.get("tags", "")
+            keywords = ", ".join(kw_raw) if isinstance(kw_raw, list) else str(kw_raw)
+            tags = ", ".join(tags_raw) if isinstance(tags_raw, list) else str(tags_raw)
+            timestamp = meta.get("timestamp", meta.get("created_at", ""))
+            parts = []
+            if timestamp:
+                parts.append(f"talk start time:{timestamp}")
+            parts.append(f"memory content:{raw_content}")
+            if ctx_summary:
+                parts.append(f"memory context:{ctx_summary}")
+            if keywords:
+                parts.append(f"memory keywords:{keywords}")
+            if tags:
+                parts.append(f"memory tags:{tags}")
+            ctx_lines.append(" ".join(parts))
+        context = "\n".join(ctx_lines)
 
         if self._llm_client is not None:
-            prompt = _ANSWER_PROMPT.format(context=context, question=question)
-            try:
-                answer = await self._llm_client.generate(
-                    prompt=prompt,
-                    temperature=0.1,
-                    max_tokens=128,
+            # A-MEM default temperature=0.7; adversarial uses self-configured value
+            temperature = 0.7
+
+            if category == 5 and reference:
+                options = ["Not mentioned in the conversation", reference]
+                if random.random() < 0.5:
+                    options.reverse()
+                prompt = _ANSWER_PROMPT_ADVERSARIAL.format(
+                    context=context,
+                    question=question,
+                    option_a=options[0],
+                    option_b=options[1],
                 )
-                if answer and answer.strip():
-                    logger.debug(f"LLM generated answer: {answer.strip()[:80]}")
-                    return answer.strip()
+                temperature = 0.5
+            elif category == 2:
+                prompt = _ANSWER_PROMPT_TEMPORAL.format(
+                    context=context,
+                    question=question,
+                )
+            else:
+                prompt = _ANSWER_PROMPT_DEFAULT.format(
+                    context=context,
+                    question=question,
+                )
+
+            try:
+                # Use generate_json + system prompt to enforce structured output,
+                # aligned with A-MEM's response_format={"type": "json_schema"} protocol.
+                result = await self._llm_client.generate_json(
+                    prompt=prompt,
+                    system_prompt="You must respond with a JSON object.",
+                    temperature=temperature,
+                    max_tokens=256,
+                )
+                # A-MEM parses: parsed.get("short_answer") or parsed.get("answer")
+                answer = result.get("short_answer") or result.get("answer") or ""
+                if answer and str(answer).strip():
+                    logger.debug(f"LLM generated answer: {str(answer).strip()[:80]}")
+                    return str(answer).strip()
                 else:
-                    logger.debug("LLM returned empty answer, using retrieval fallback")
+                    logger.debug("LLM returned empty JSON answer, using retrieval fallback")
             except Exception as e:
                 logger.debug(f"LLM answer generation failed: {type(e).__name__}: {e}, using retrieval fallback")
 
-        # Fallback: concatenate top-3 retrieved contents
         fallback = " ".join(r.get("content", "")[:200] for r in retrieved[:3])
         logger.debug(f"Using retrieval fallback answer (len={len(fallback)}): {fallback[:80]}")
         return fallback
@@ -225,16 +321,7 @@ class BenchmarkRunner:
         data = {
             "completed_sessions": completed_sessions,
             "partial_metrics": {
-                name: {
-                    "f1_scores": m.f1_scores,
-                    "bleu_scores": m.bleu_scores,
-                    "rouge_l_scores": m.rouge_l_scores,
-                    "rouge2_scores": m.rouge2_scores,
-                    "meteor_scores": m.meteor_scores,
-                    "sbert_scores": m.sbert_scores,
-                    "retrieval_times_us": m.retrieval_times_us,
-                    "memory_usage_mb": m.memory_usage_mb,
-                }
+                name: m.to_dict()
                 for name, m in partial_metrics.items()
             },
         }
@@ -247,17 +334,36 @@ class BenchmarkRunner:
     def _restore_metrics(self, checkpoint: dict) -> dict[str, EvalMetrics]:
         restored: dict[str, EvalMetrics] = {}
         for name, raw in checkpoint.get("partial_metrics", {}).items():
-            m = EvalMetrics()
-            m.f1_scores = raw.get("f1_scores", [])
-            m.bleu_scores = raw.get("bleu_scores", [])
-            m.rouge_l_scores = raw.get("rouge_l_scores", [])
-            m.rouge2_scores = raw.get("rouge2_scores", [])
-            m.meteor_scores = raw.get("meteor_scores", [])
-            m.sbert_scores = raw.get("sbert_scores", [])
-            m.retrieval_times_us = raw.get("retrieval_times_us", [])
-            m.memory_usage_mb = raw.get("memory_usage_mb", [])
-            restored[name] = m
+            restored[name] = EvalMetrics.from_dict(raw)
         return restored
+
+    def _append_failed_scores(self, metrics: EvalMetrics) -> None:
+        """Append zeroed QA metrics when scoring fails."""
+        for lst in (
+            metrics.f1_scores,
+            metrics.bleu_scores,
+            metrics.rouge_l_scores,
+            metrics.rouge2_scores,
+            metrics.meteor_scores,
+        ):
+            lst.append(0.0)
+
+    def _score_with_optional_category(
+        self,
+        metrics: EvalMetrics,
+        prediction: str,
+        reference: str,
+        retrieval_time_us: float,
+        category: int | None,
+    ) -> None:
+        """Score overall metrics and mirror scores into category bucket if provided."""
+        metrics.retrieval_times_us.append(retrieval_time_us)
+        self._score_all(prediction, reference, metrics)
+
+        if category is not None:
+            cat_metrics = metrics.category_metrics(category)
+            cat_metrics.retrieval_times_us.append(retrieval_time_us)
+            self._score_all(prediction, reference, cat_metrics)
 
     def clear_checkpoint(self) -> None:
         if self._checkpoint_path.exists():
@@ -338,9 +444,16 @@ class BenchmarkRunner:
 
             # ── Phase 1: Feed dialogue turns ──────────────────────────
             for turn_idx, turn in enumerate(dialogue):
-                content = turn.get("content", "")
-                if not content.strip():
+                raw_text = turn.get("content", "")
+                if not raw_text.strip():
                     continue
+
+                # Align with A-MEM ingestion: "Speaker X says: <text>"
+                speaker = turn.get("speaker", "")
+                date_time = turn.get("created_at", "")
+                content = f"Speaker {speaker} says: {raw_text}" if speaker else raw_text
+                if date_time:
+                    content = f"[{date_time}] {content}"
 
                 try:
                     await self._system.add_interaction(content=content)
@@ -368,41 +481,55 @@ class BenchmarkRunner:
             for qa in questions:
                 question = qa.get("question", "")
                 reference = qa.get("answer", "")
+                raw_category = qa.get("category")
+                category = raw_category if isinstance(raw_category, int) else None
                 if not question or not reference:
                     continue
 
-                # Evaluate PhaseForget: retrieve → generate → score
+                # Evaluate PhaseForget: keyword expand → graph search → generate → score
                 try:
+                    expanded_query = await self._expand_query(question)
                     with RetrievalTimer() as timer:
-                        pf_results = self._system.search(question)
-                    metrics["PhaseForget"].retrieval_times_us.append(timer.elapsed_us)
-
-                    prediction = await self._generate_answer(question, pf_results)
-                    self._score_all(prediction, reference, metrics["PhaseForget"])
+                        pf_results = await self._system.search_with_graph(expanded_query)
+                    prediction = await self._generate_answer(
+                        question, pf_results,
+                        category=category,
+                        reference=reference,
+                    )
+                    self._score_with_optional_category(
+                        metrics=metrics["PhaseForget"],
+                        prediction=prediction,
+                        reference=reference,
+                        retrieval_time_us=timer.elapsed_us,
+                        category=category,
+                    )
                 except Exception as e:
                     logger.warning(f"PhaseForget QA failed for '{question[:50]}': {e}")
-                    # Append zeros to keep sample counts aligned
                     m = metrics["PhaseForget"]
-                    for lst in (m.f1_scores, m.bleu_scores, m.rouge_l_scores,
-                                m.rouge2_scores, m.meteor_scores):
-                        lst.append(0.0)
+                    self._append_failed_scores(m)
+                    if category is not None:
+                        self._append_failed_scores(m.category_metrics(category))
 
                 # Evaluate each baseline: retrieve → generate → score
                 for baseline in self._baselines:
                     try:
                         with RetrievalTimer() as timer:
                             bl_results = baseline.search(question, top_k=5)
-                        metrics[baseline.name()].retrieval_times_us.append(timer.elapsed_us)
-
                         prediction = await self._generate_answer(question, bl_results)
-                        self._score_all(prediction, reference, metrics[baseline.name()])
+                        self._score_with_optional_category(
+                            metrics=metrics[baseline.name()],
+                            prediction=prediction,
+                            reference=reference,
+                            retrieval_time_us=timer.elapsed_us,
+                            category=category,
+                        )
                     except Exception as e:
                         logger.warning(f"Baseline {baseline.name()} QA failed: {e}")
                         # Append zeros to keep sample counts aligned
                         m = metrics[baseline.name()]
-                        for lst in (m.f1_scores, m.bleu_scores, m.rouge_l_scores,
-                                    m.rouge2_scores, m.meteor_scores):
-                            lst.append(0.0)
+                        self._append_failed_scores(m)
+                        if category is not None:
+                            self._append_failed_scores(m.category_metrics(category))
 
             # Record final memory snapshot for this session
             mem_mb = _get_process_memory_mb()
@@ -453,6 +580,28 @@ class BenchmarkRunner:
                 f"{m.avg_meteor:>8.4f} {m.avg_sbert:>8.2f} "
                 f"{m.avg_retrieval_time_us:>12.1f} {n:>6}"
             )
+
+        has_category_breakdown = any(m.by_category for m in results.values())
+        if has_category_breakdown:
+            lines.extend([
+                "",
+                "Category Breakdown (from QA.category)",
+                "-" * 100,
+                f"{'System':<20} {'Cat':>5} {'F1':>8} {'BLEU':>8} {'ROUGE-L':>8} "
+                f"{'ROUGE2':>8} {'METEOR':>8} {'SBERT':>8} {'RetTime(us)':>12} {'N':>6}",
+                "-" * 100,
+            ])
+            for name, m in results.items():
+                for cat in sorted(m.by_category):
+                    cat_m = m.by_category[cat]
+                    n = len(cat_m.f1_scores)
+                    lines.append(
+                        f"{name:<20} {cat:>5} "
+                        f"{cat_m.avg_f1:>8.4f} {cat_m.avg_bleu:>8.4f} "
+                        f"{cat_m.avg_rouge_l:>8.4f} {cat_m.avg_rouge2:>8.4f} "
+                        f"{cat_m.avg_meteor:>8.4f} {cat_m.avg_sbert:>8.2f} "
+                        f"{cat_m.avg_retrieval_time_us:>12.1f} {n:>6}"
+                    )
 
         lines.extend(["", "=" * 100])
         report = "\n".join(lines)

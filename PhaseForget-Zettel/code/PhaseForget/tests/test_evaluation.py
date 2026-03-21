@@ -119,6 +119,21 @@ class TestLoCoMoLoader:
         categories = [q["category"] for q in sessions[0]["questions"]]
         assert 5 not in categories
 
+    def test_adversarial_included_when_enabled(self):
+        """Category-5 QA should be included with include_adversarial=True."""
+        data = [self._make_official_record()]
+        fd, path = tempfile.mkstemp(suffix=".json")
+        os.close(fd)
+        with open(path, "w") as f:
+            json.dump(data, f)
+
+        loader = LoCoMoLoader(include_adversarial=True)
+        sessions = loader.load(path)
+        os.unlink(path)
+
+        categories = [q["category"] for q in sessions[0]["questions"]]
+        assert 5 in categories
+
     def test_session_id_format(self):
         """session_id should be the sample_id (one session per record)."""
         data = [self._make_official_record()]

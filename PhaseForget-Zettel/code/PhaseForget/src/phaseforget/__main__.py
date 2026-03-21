@@ -11,6 +11,7 @@ import argparse
 import asyncio
 import logging
 import sys
+from pathlib import Path
 
 from phaseforget.config.settings import get_settings
 from phaseforget.pipeline.orchestrator import PhaseForgetSystem
@@ -101,7 +102,10 @@ async def run_benchmark(args):
                 return
 
         loaders = {
-            "locomo": LoCoMoLoader(record_indices=record_indices),
+            "locomo": LoCoMoLoader(
+                record_indices=record_indices,
+                include_adversarial=getattr(args, "include_adversarial", False),
+            ),
             "personamem": PersonaMemLoader(),
             "dialsim": DialSimLoader(),
         }
@@ -120,6 +124,23 @@ async def run_benchmark(args):
             max_sessions=args.max_sessions,
         )
         runner.print_report(results)
+
+        # Save results to file
+        import json
+        from datetime import datetime
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        results_file = f"./data/bench_{args.dataset}_{timestamp}.json"
+        results_data = {
+            "timestamp": timestamp,
+            "dataset": args.dataset,
+            "data_path": args.data_path,
+            "results": {name: m.to_dict() for name, m in results.items()},
+        }
+        results_file_path = Path(results_file)
+        results_file_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(results_file_path, "w", encoding="utf-8") as f:
+            json.dump(results_data, f, indent=2, ensure_ascii=False)
+        print(f"\nResults saved to: {results_file}")
     finally:
         await system.close()
 
@@ -157,6 +178,13 @@ def main():
             "(e.g. '0,2,4' selects the 1st, 3rd, 5th records). "
             "Default: use all records."
         )
+    )
+    bench_parser.add_argument(
+        "--include-adversarial", action="store_true",
+        help=(
+            "Include LoCoMo category-5 adversarial QA in evaluation. "
+            "Default behavior excludes category-5."
+        ),
     )
     bench_parser.add_argument(
         "--reset-checkpoint", action="store_true",

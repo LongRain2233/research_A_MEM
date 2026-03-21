@@ -150,6 +150,13 @@ class ChromaColdTrack:
         notes = []
         for i, doc_id in enumerate(results["ids"]):
             metadata = results["metadatas"][i] if results["metadatas"] else {}
+            # Deserialize JSON fields (same as search method)
+            for key in ("keywords", "tags"):
+                if key in metadata and isinstance(metadata[key], str):
+                    try:
+                        metadata[key] = json.loads(metadata[key])
+                    except json.JSONDecodeError:
+                        pass
             notes.append({
                 "id": doc_id,
                 "content": results["documents"][i] if results["documents"] else "",

@@ -1,7 +1,7 @@
 # PhaseForget-Zettel 完整测试指南
 
 本文档提供从环境准备到完整验证的系统化测试方案。
-
+python hyperparameter_search.py --record-indices 0,1 --theta-sim-values 0.65,0.7,0.8 --theta-sum-values 10,20,30,40,50 --theta-evict-values 0.2,0.3,0.4
 ## 目录
 
 1. [阶段 1：环境准备](#阶段-1环境准备)
