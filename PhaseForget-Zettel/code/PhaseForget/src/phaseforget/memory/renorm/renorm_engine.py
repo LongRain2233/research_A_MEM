@@ -145,12 +145,17 @@ class RenormalizationEngine:
 
         # ── Step 3: Synthesis Operator S ─────────────────────────────────
         notes_text = self._format_notes_for_llm(projected_notes)
-        synth_result = await self._llm.generate_json(
-            RENORMALIZATION_PROMPT.format(notes_text=notes_text)
-        )
+        try:
+            synth_result = await self._llm.generate_json(
+                RENORMALIZATION_PROMPT.format(notes_text=notes_text),
+                system_prompt="You are a knowledge synthesis engine. Output ONLY a valid JSON object with keys: sigma, delta. No explanations, no markdown.",
+            )
+        except Exception as e:
+            logger.warning(f"Renorm[{anchor_v}]: synthesis LLM call failed ({e}), skipping renorm")
+            return result
 
-        sigma_text = synth_result.get("sigma", "")
-        delta_text = synth_result.get("delta", "")
+        sigma_text = synth_result.get("sigma", "") if synth_result else ""
+        delta_text = synth_result.get("delta", "") if synth_result else ""
 
         if not sigma_text:
             logger.warning(f"Renorm[{anchor_v}]: LLM returned empty Sigma")
@@ -217,7 +222,8 @@ class RenormalizationEngine:
         """
         try:
             response = await self._llm.generate_json(
-                ENTAILMENT_PROMPT.format(premise=premise, hypothesis=hypothesis)
+                ENTAILMENT_PROMPT.format(premise=premise, hypothesis=hypothesis),
+                system_prompt="You are a logical entailment judge. Output ONLY a valid JSON object with keys: entailed, confidence, reasoning. No explanations, no markdown.",
             )
             return response.get("entailed", False) is True
         except Exception as e:

@@ -182,6 +182,19 @@ async def run_single_trial(
                 "avg_retrieval_time_us": pf.avg_retrieval_time_us,
                 "n_questions": len(pf.f1_scores),
             }
+            # 添加按类别的指标
+            if pf.by_category:
+                result_metrics["by_category"] = {}
+                for cat, cat_m in sorted(pf.by_category.items()):
+                    result_metrics["by_category"][str(cat)] = {
+                        "avg_f1": cat_m.avg_f1,
+                        "avg_bleu": cat_m.avg_bleu,
+                        "avg_rouge_l": cat_m.avg_rouge_l,
+                        "avg_rouge2": cat_m.avg_rouge2,
+                        "avg_meteor": cat_m.avg_meteor,
+                        "avg_sbert": cat_m.avg_sbert,
+                        "n_questions": len(cat_m.f1_scores),
+                    }
 
         await system.close()
 
@@ -282,6 +295,7 @@ def print_leaderboard(results: list[dict], top_n: int = 10) -> None:
     if sorted_results:
         best = sorted_results[0]
         bp = best["params"]
+        bm = best["metrics"]
         print(f"\n最佳超参数组合（综合分 {best['composite_score']:.4f}）：")
         print(f"  theta_sim   = {bp['theta_sim']}")
         print(f"  theta_sum   = {bp['theta_sum']}")
@@ -290,7 +304,34 @@ def print_leaderboard(results: list[dict], top_n: int = 10) -> None:
         print(f"  THETA_SIM={bp['theta_sim']}")
         print(f"  THETA_SUM={bp['theta_sum']}")
         print(f"  THETA_EVICT={bp['theta_evict']}")
-        print()
+
+        # 显示按类别的细分指标
+        by_cat = bm.get("by_category", {})
+        if by_cat:
+            print(f"\n最佳结果的类别细分（Category Breakdown）：")
+            print("-" * 80)
+            cat_names = {
+                "1": "Single-hop (单跳)",
+                "2": "Temporal (时间)",
+                "3": "Multi-hop (多跳)",
+                "4": "Open-domain (开放域)",
+                "5": "Adversarial (对抗性)",
+            }
+            print(f"{'类别':<25} {'F1':>8} {'ROUGE-L':>8} {'METEOR':>8} {'BLEU':>8} {'样本数':>6}")
+            print("-" * 80)
+            for cat in sorted(by_cat.keys(), key=int):
+                cat_data = by_cat[cat]
+                cat_name = cat_names.get(cat, f"Category {cat}")
+                print(
+                    f"{cat_name:<25} "
+                    f"{cat_data.get('avg_f1', 0):>8.4f} "
+                    f"{cat_data.get('avg_rouge_l', 0):>8.4f} "
+                    f"{cat_data.get('avg_meteor', 0):>8.4f} "
+                    f"{cat_data.get('avg_bleu', 0):>8.4f} "
+                    f"{cat_data.get('n_questions', 0):>6}"
+                )
+            print("-" * 80)
+            print()
 
 
 async def main_async(args: argparse.Namespace) -> None:
@@ -387,6 +428,14 @@ async def main_async(args: argparse.Namespace) -> None:
                 f"METEOR={m.get('avg_meteor', 0):.4f}  "
                 f"耗时={result['elapsed_seconds']}s"
             )
+            # 打印简化的类别细分
+            by_cat = m.get("by_category", {})
+            if by_cat:
+                cat_summary = []
+                for cat in sorted(by_cat.keys(), key=int):
+                    cat_data = by_cat[cat]
+                    cat_summary.append(f"C{cat}:F1={cat_data.get('avg_f1', 0):.3f}")
+                print(f"    类别细分: {' | '.join(cat_summary)}")
 
     print("\n所有实验完成！")
     print_leaderboard(all_results)

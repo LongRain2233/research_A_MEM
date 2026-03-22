@@ -81,14 +81,25 @@ class StateManager:
         if not skip_metadata:
             try:
                 meta = await self._llm.generate_json(
-                    METADATA_EXTRACTION_PROMPT.format(content=content)
+                    METADATA_EXTRACTION_PROMPT.format(content=content),
+                    system_prompt="You are a metadata extraction engine. Output ONLY a valid JSON object with keys: keywords, tags, context. No explanations, no markdown.",
                 )
-                note.keywords = meta.get("keywords", [])
+                # Validate and coerce each field to its expected type so that
+                # a malformed-but-parsed response never silently corrupts state.
+                raw_kw = meta.get("keywords", [])
+                note.keywords = raw_kw if isinstance(raw_kw, list) else []
                 if not tags:
-                    note.tags = meta.get("tags", [])
-                note.context = meta.get("context", "")
+                    raw_tags = meta.get("tags", [])
+                    note.tags = raw_tags if isinstance(raw_tags, list) else []
+                raw_ctx = meta.get("context", "")
+                note.context = raw_ctx if isinstance(raw_ctx, str) else ""
             except Exception as e:
                 logger.warning(f"Metadata extraction failed, proceeding without: {e}")
+                # Ensure note fields keep clean defaults even on unexpected failure
+                note.keywords = []
+                if not tags:
+                    note.tags = []
+                note.context = ""
 
         # Persist to dual-track storage
         self._cold.add_note(note)
@@ -100,6 +111,32 @@ class StateManager:
 
         logger.info(f"Created note {note.id} (abstract={is_abstract})")
         return note
+
+    async def _build_semantic_links(self, note: MemoryNote) -> None:
+        """
+        Find semantically similar existing notes and insert bidirectional links.
+        Mirrors A-MEM's process_memory / strengthen action: after each note is
+        written, immediately connect it to its top-K neighbours so the link graph
+        is populated for graph-expansion retrieval.
+        """
+        link_k = getattr(self._settings, "link_top_k", 5)
+        try:
+            candidates = self._cold.search(
+                query_text=note.build_enhanced_text(),
+                top_k=link_k + 1,  # +1 because the note itself may appear
+            )
+            neighbor_ids = [
+                c["id"] for c in candidates
+                if c["id"] != note.id
+            ][:link_k]
+
+            if neighbor_ids:
+                await self._hot.insert_links(note.id, neighbor_ids)
+                logger.debug(
+                    f"Semantic links built: {note.id} -> {neighbor_ids}"
+                )
+        except Exception as e:
+            logger.debug(f"Semantic link building skipped for {note.id}: {e}")
 
     async def update_utility_on_retrieval(
         self,

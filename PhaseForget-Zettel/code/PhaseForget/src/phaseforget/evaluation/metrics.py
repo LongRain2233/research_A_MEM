@@ -25,6 +25,9 @@ class EvalMetrics:
     retrieval_times_us: list[float] = field(default_factory=list)
     memory_usage_mb: list[float] = field(default_factory=list)
     by_category: dict[int, "EvalMetrics"] = field(default_factory=dict, repr=False)
+    # LLM parse failure counters — help diagnose model output quality issues
+    query_expand_parse_fail: int = 0
+    answer_parse_fail: int = 0
 
     @property
     def avg_f1(self) -> float:
@@ -64,6 +67,12 @@ class EvalMetrics:
             self.by_category[category] = EvalMetrics()
         return self.by_category[category]
 
+    @property
+    def parse_fail_rate(self) -> float:
+        """Fraction of QA answer calls that failed to parse, over total scored samples."""
+        n = len(self.f1_scores)
+        return self.answer_parse_fail / n if n > 0 else 0.0
+
     def to_dict(self, include_categories: bool = True) -> dict:
         """Serialize metrics for checkpoint persistence."""
         data = {
@@ -75,6 +84,8 @@ class EvalMetrics:
             "sbert_scores": self.sbert_scores,
             "retrieval_times_us": self.retrieval_times_us,
             "memory_usage_mb": self.memory_usage_mb,
+            "query_expand_parse_fail": self.query_expand_parse_fail,
+            "answer_parse_fail": self.answer_parse_fail,
         }
         if include_categories and self.by_category:
             data["by_category"] = {
@@ -95,6 +106,8 @@ class EvalMetrics:
         m.sbert_scores = raw.get("sbert_scores", [])
         m.retrieval_times_us = raw.get("retrieval_times_us", [])
         m.memory_usage_mb = raw.get("memory_usage_mb", [])
+        m.query_expand_parse_fail = raw.get("query_expand_parse_fail", 0)
+        m.answer_parse_fail = raw.get("answer_parse_fail", 0)
 
         for cat_raw, cat_data in raw.get("by_category", {}).items():
             try:

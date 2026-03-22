@@ -178,7 +178,7 @@ class BenchmarkRunner:
                 logger.warning(f"Failed to load SBERT model, SBERT scores will be 0: {e}")
         return self._sbert_model
 
-    async def _expand_query(self, question: str) -> str:
+    async def _expand_query(self, question: str, metrics: "EvalMetrics | None" = None) -> str:
         """Extract search keywords from a question via LLM (A-MEM protocol)."""
         if self._llm_client is None:
             return question
@@ -190,10 +190,15 @@ class BenchmarkRunner:
                 max_tokens=256,
             )
             keywords = result.get("keywords", "")
-            if keywords and keywords.strip():
-                return keywords.strip()
+            if keywords and str(keywords).strip():
+                return str(keywords).strip()
+            # Empty result counts as a parse failure (model returned {} or missing key)
+            if metrics is not None:
+                metrics.query_expand_parse_fail += 1
         except Exception as e:
             logger.debug(f"Query expansion failed, using raw question: {e}")
+            if metrics is not None:
+                metrics.query_expand_parse_fail += 1
         return question
 
     async def _generate_answer(
@@ -202,6 +207,7 @@ class BenchmarkRunner:
         retrieved: list[dict],
         category: int | None = None,
         reference: str = "",
+        metrics: "EvalMetrics | None" = None,
     ) -> str:
         """
         Generate answer using LLM with retrieved memories as context.
@@ -282,8 +288,12 @@ class BenchmarkRunner:
                     return str(answer).strip()
                 else:
                     logger.debug("LLM returned empty JSON answer, using retrieval fallback")
+                    if metrics is not None:
+                        metrics.answer_parse_fail += 1
             except Exception as e:
                 logger.debug(f"LLM answer generation failed: {type(e).__name__}: {e}, using retrieval fallback")
+                if metrics is not None:
+                    metrics.answer_parse_fail += 1
 
         fallback = " ".join(r.get("content", "")[:200] for r in retrieved[:3])
         logger.debug(f"Using retrieval fallback answer (len={len(fallback)}): {fallback[:80]}")
@@ -488,13 +498,15 @@ class BenchmarkRunner:
 
                 # Evaluate PhaseForget: keyword expand → graph search → generate → score
                 try:
-                    expanded_query = await self._expand_query(question)
+                    pf_metrics = metrics["PhaseForget"]
+                    expanded_query = await self._expand_query(question, metrics=pf_metrics)
                     with RetrievalTimer() as timer:
                         pf_results = await self._system.search_with_graph(expanded_query)
                     prediction = await self._generate_answer(
                         question, pf_results,
                         category=category,
                         reference=reference,
+                        metrics=pf_metrics,
                     )
                     self._score_with_optional_category(
                         metrics=metrics["PhaseForget"],
@@ -504,11 +516,24 @@ class BenchmarkRunner:
                         category=category,
                     )
                 except Exception as e:
+                    # A-MEM alignment: on any failure use question text as fallback
+                    # prediction rather than appending 0 scores, to avoid unfairly
+                    # penalising the system for transient LLM/network errors.
                     logger.warning(f"PhaseForget QA failed for '{question[:50]}': {e}")
-                    m = metrics["PhaseForget"]
-                    self._append_failed_scores(m)
-                    if category is not None:
-                        self._append_failed_scores(m.category_metrics(category))
+                    try:
+                        fallback_pred = question[:200]
+                        self._score_with_optional_category(
+                            metrics=metrics["PhaseForget"],
+                            prediction=fallback_pred,
+                            reference=reference,
+                            retrieval_time_us=0,
+                            category=category,
+                        )
+                    except Exception:
+                        m = metrics["PhaseForget"]
+                        self._append_failed_scores(m)
+                        if category is not None:
+                            self._append_failed_scores(m.category_metrics(category))
 
                 # Evaluate each baseline: retrieve → generate → score
                 for baseline in self._baselines:
@@ -556,19 +581,19 @@ class BenchmarkRunner:
         Format benchmark results into a human-readable report.
 
         Displays all 6 QA metrics (F1, BLEU-1, ROUGE-L, ROUGE-2, METEOR, SBERT)
-        plus retrieval latency and sample count.
+        plus retrieval latency, sample count, and LLM parse failure rates.
 
         Returns the report string (also prints to stdout).
         """
         lines = [
-            "=" * 100,
+            "=" * 110,
             "PhaseForget-Zettel Benchmark Report (with 6 QA Metrics)",
-            "=" * 100,
+            "=" * 110,
             "",
             f"{'System':<20} {'F1':>8} {'BLEU':>8} {'ROUGE-L':>8} "
             f"{'ROUGE2':>8} {'METEOR':>8} {'SBERT':>8} "
-            f"{'RetTime(us)':>12} {'N':>6}",
-            "-" * 100,
+            f"{'RetTime(us)':>12} {'N':>6} {'AnsFailRate':>12} {'QExpFail':>9}",
+            "-" * 110,
         ]
 
         for name, m in results.items():
@@ -578,7 +603,8 @@ class BenchmarkRunner:
                 f"{m.avg_f1:>8.4f} {m.avg_bleu:>8.4f} "
                 f"{m.avg_rouge_l:>8.4f} {m.avg_rouge2:>8.4f} "
                 f"{m.avg_meteor:>8.4f} {m.avg_sbert:>8.2f} "
-                f"{m.avg_retrieval_time_us:>12.1f} {n:>6}"
+                f"{m.avg_retrieval_time_us:>12.1f} {n:>6} "
+                f"{m.parse_fail_rate:>11.1%} {m.query_expand_parse_fail:>9d}"
             )
 
         has_category_breakdown = any(m.by_category for m in results.values())
@@ -586,10 +612,10 @@ class BenchmarkRunner:
             lines.extend([
                 "",
                 "Category Breakdown (from QA.category)",
-                "-" * 100,
+                "-" * 110,
                 f"{'System':<20} {'Cat':>5} {'F1':>8} {'BLEU':>8} {'ROUGE-L':>8} "
                 f"{'ROUGE2':>8} {'METEOR':>8} {'SBERT':>8} {'RetTime(us)':>12} {'N':>6}",
-                "-" * 100,
+                "-" * 110,
             ])
             for name, m in results.items():
                 for cat in sorted(m.by_category):
@@ -603,7 +629,7 @@ class BenchmarkRunner:
                         f"{cat_m.avg_retrieval_time_us:>12.1f} {n:>6}"
                     )
 
-        lines.extend(["", "=" * 100])
+        lines.extend(["", "=" * 110])
         report = "\n".join(lines)
         print(report)
         return report
