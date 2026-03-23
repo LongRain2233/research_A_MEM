@@ -164,6 +164,28 @@ class ChromaColdTrack:
             })
         return notes
 
+    def update_note(self, note: MemoryNote) -> None:
+        """
+        Update an existing note's embedding and metadata in-place.
+        Called after process_memory mutates a neighbor's context/tags so that
+        the vector space reflects the updated semantic state.
+        """
+        enhanced_text = note.build_enhanced_text()
+        metadata = {
+            "content": note.content,
+            "keywords": json.dumps(note.keywords),
+            "tags": json.dumps(note.tags),
+            "context": note.context,
+            "is_abstract": str(note.is_abstract),
+            "timestamp": note.timestamp.isoformat(),
+        }
+        self._collection.update(
+            documents=[enhanced_text],
+            metadatas=[metadata],
+            ids=[note.id],
+        )
+        logger.debug(f"Cold track: updated note {note.id}")
+
     def delete(self, note_id: str) -> None:
         """Physical delete - permanently remove a note from the vector store."""
         self._collection.delete(ids=[note_id])

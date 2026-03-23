@@ -31,6 +31,44 @@ Rules:
 """
 
 
+# ── Module 1b: Memory Evolution (A-MEM process_memory alignment) ─────────
+# Called at note-creation time to decide strengthen / update_neighbor actions.
+
+EVOLUTION_PROMPT = """You are an AI memory evolution agent responsible for managing and evolving a knowledge base.
+Analyze the new memory note according to its keywords and context, together with its nearest neighbor memories.
+Make decisions about its evolution.
+
+The new memory:
+context: {context}
+content: {content}
+keywords: {keywords}
+
+The nearest neighbor memories:
+{nearest_neighbors_memories}
+
+Based on this information, determine:
+1. Should this memory be evolved? Consider its relationships with other memories.
+2. What specific actions should be taken (strengthen, update_neighbor)?
+   2.1 strengthen: connect this memory to suggested neighbors and update its tags.
+   2.2 update_neighbor: update the context and tags of neighbor memories to reflect new understanding.
+        The length of new_tags_neighborhood MUST equal {neighbor_number}.
+        The length of new_context_neighborhood MUST equal {neighbor_number}.
+        If a neighbor needs no update, copy its original context and tags unchanged.
+
+Return your decision as a JSON object:
+{{
+    "should_evolve": true or false,
+    "actions": ["strengthen", "update_neighbor"],
+    "suggested_connections": [0, 1, ...],
+    "tags_to_update": ["tag_1", "tag_n"],
+    "new_context_neighborhood": ["new context for neighbor 0", ...],
+    "new_tags_neighborhood": [["tag_1", "tag_n"], ...]
+}}
+
+Output ONLY the JSON object. No explanations, no markdown formatting.
+"""
+
+
 # ── Module 3: Renormalization Synthesis (M_renorm) ───────────────────────
 # Generates Sigma (order parameter) and Delta (correction term).
 # Enforces strict decoupled output per Implementation Plan §3 Module 3.

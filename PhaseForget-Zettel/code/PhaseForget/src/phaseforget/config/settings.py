@@ -46,7 +46,8 @@ class Settings(BaseSettings):
     # ── Retrieval Parameters ─────────────────────────────────────────────
 
     retrieval_top_k: int = Field(default=10, description="Top-K neighbors for ChromaDB recall")
-    link_top_k: int = Field(default=5, description="Top-K semantic neighbors to link at note creation (A-MEM alignment)")
+    link_top_k: int = Field(default=5, description="Top-K semantic neighbors searched in process_memory (A-MEM alignment)")
+    evo_threshold: int = Field(default=100, description="Number of A-MEM-style evolutions between consolidate_memories calls")
     projection_max_notes: int = Field(default=15, description="Max notes fed into renormalization LLM")
     search_min_similarity: float = Field(
         default=0.0,

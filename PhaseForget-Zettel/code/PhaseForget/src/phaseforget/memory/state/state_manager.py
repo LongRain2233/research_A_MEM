@@ -20,7 +20,7 @@ from typing import Optional
 
 from phaseforget.config.settings import Settings
 from phaseforget.llm.base import BaseLLMClient
-from phaseforget.llm.prompts.templates import METADATA_EXTRACTION_PROMPT
+from phaseforget.llm.prompts.templates import EVOLUTION_PROMPT, METADATA_EXTRACTION_PROMPT
 from phaseforget.memory.models.note import MemoryNote
 from phaseforget.storage.cold_track.chroma_store import ChromaColdTrack
 from phaseforget.storage.hot_track.sqlite_store import SQLiteHotTrack
@@ -45,6 +45,7 @@ class StateManager:
         self._hot = hot_track
         self._llm = llm_client
         self._settings = settings
+        self._evo_cnt: int = 0  # counts A-MEM-style evolutions for consolidate trigger
 
     async def create_note(
         self,
@@ -109,34 +110,183 @@ class StateManager:
             is_abstract=is_abstract,
         )
 
+        # A-MEM alignment: run process_memory to build links and evolve neighbors.
+        # Skipped for abstract notes (Sigma/Delta) to avoid recursive evolution.
+        if not is_abstract and not skip_metadata:
+            evolved = await self._process_memory(note)
+            if evolved:
+                self._evo_cnt += 1
+                evo_threshold = getattr(self._settings, "evo_threshold", 100)
+                if self._evo_cnt % evo_threshold == 0:
+                    await self.consolidate_memories()
+
         logger.info(f"Created note {note.id} (abstract={is_abstract})")
         return note
 
-    async def _build_semantic_links(self, note: MemoryNote) -> None:
+    async def _process_memory(self, note: MemoryNote) -> bool:
         """
-        Find semantically similar existing notes and insert bidirectional links.
-        Mirrors A-MEM's process_memory / strengthen action: after each note is
-        written, immediately connect it to its top-K neighbours so the link graph
-        is populated for graph-expansion retrieval.
+        A-MEM process_memory alignment: on every note creation, find top-K
+        semantic neighbors and let the LLM decide whether to:
+          - strengthen: add links from this note to suggested neighbors, update its tags.
+          - update_neighbor: rewrite the context and tags of existing neighbors
+            so their embeddings stay semantically current.
+
+        Returns True if the LLM decided to evolve (should_evolve=true).
         """
         link_k = getattr(self._settings, "link_top_k", 5)
         try:
             candidates = self._cold.search(
                 query_text=note.build_enhanced_text(),
-                top_k=link_k + 1,  # +1 because the note itself may appear
+                top_k=link_k + 1,
             )
-            neighbor_ids = [
-                c["id"] for c in candidates
-                if c["id"] != note.id
-            ][:link_k]
-
-            if neighbor_ids:
-                await self._hot.insert_links(note.id, neighbor_ids)
-                logger.debug(
-                    f"Semantic links built: {note.id} -> {neighbor_ids}"
-                )
+            neighbors = [c for c in candidates if c["id"] != note.id][:link_k]
         except Exception as e:
-            logger.debug(f"Semantic link building skipped for {note.id}: {e}")
+            logger.debug(f"process_memory: neighbor search failed for {note.id}: {e}")
+            return False
+
+        if not neighbors:
+            return False
+
+        # Build neighbor description string (mirrors A-MEM find_related_memories)
+        neighbor_lines = []
+        for idx, n in enumerate(neighbors):
+            meta = n.get("metadata", {})
+            kw = meta.get("keywords", [])
+            tags = meta.get("tags", [])
+            ctx = meta.get("context", "")
+            ts = meta.get("timestamp", "")
+            neighbor_lines.append(
+                f"memory index:{idx}\t talk start time:{ts}\t "
+                f"memory content: {meta.get('content', n.get('content',''))}\t "
+                f"memory context: {ctx}\t "
+                f"memory keywords: {kw}\t "
+                f"memory tags: {tags}"
+            )
+        neighbor_str = "\n".join(neighbor_lines)
+
+        try:
+            resp = await self._llm.generate_json(
+                EVOLUTION_PROMPT.format(
+                    context=note.context,
+                    content=note.content,
+                    keywords=note.keywords,
+                    nearest_neighbors_memories=neighbor_str,
+                    neighbor_number=len(neighbors),
+                ),
+                system_prompt="You are a memory evolution agent. Output ONLY a valid JSON object. No explanations, no markdown.",
+            )
+        except Exception as e:
+            logger.debug(f"process_memory: LLM call failed for {note.id}: {e}")
+            return False
+
+        should_evolve = resp.get("should_evolve", False)
+        if not should_evolve:
+            return False
+
+        actions = resp.get("actions", [])
+
+        if "strengthen" in actions:
+            suggested = resp.get("suggested_connections", [])
+            new_tags = resp.get("tags_to_update", [])
+            link_targets = [
+                neighbors[i]["id"] for i in suggested
+                if isinstance(i, int) and i < len(neighbors)
+            ]
+            if link_targets:
+                await self._hot.insert_links(note.id, link_targets)
+                logger.debug(f"process_memory strengthen: {note.id} -> {link_targets}")
+            if new_tags and isinstance(new_tags, list):
+                note.tags = new_tags
+                self._cold.update_note(note)
+
+        if "update_neighbor" in actions:
+            new_contexts = resp.get("new_context_neighborhood", [])
+            new_tags_nb = resp.get("new_tags_neighborhood", [])
+            for i, neighbor in enumerate(neighbors):
+                nb_meta = neighbor.get("metadata", {})
+                updated_ctx = new_contexts[i] if i < len(new_contexts) else nb_meta.get("context", "")
+                updated_tags = new_tags_nb[i] if i < len(new_tags_nb) else nb_meta.get("tags", [])
+                if not isinstance(updated_tags, list):
+                    updated_tags = nb_meta.get("tags", [])
+
+                # Reconstruct a MemoryNote shell just to call update_note
+                from datetime import datetime as _dt
+                try:
+                    ts_raw = nb_meta.get("timestamp", "")
+                    ts = _dt.fromisoformat(ts_raw) if ts_raw else _dt.utcnow()
+                except ValueError:
+                    ts = _dt.utcnow()
+                nb_note = MemoryNote(
+                    id=neighbor["id"],
+                    content=nb_meta.get("content", neighbor.get("content", "")),
+                    keywords=nb_meta.get("keywords", []) if isinstance(nb_meta.get("keywords"), list) else [],
+                    tags=updated_tags,
+                    context=updated_ctx,
+                    timestamp=ts,
+                )
+                self._cold.update_note(nb_note)
+                logger.debug(f"process_memory update_neighbor: {neighbor['id']} context/tags refreshed")
+
+        return True
+
+    async def consolidate_memories(self) -> None:
+        """
+        A-MEM consolidate_memories alignment: after evo_threshold evolutions,
+        rebuild every note's embedding from its current (possibly updated)
+        context, keywords, and tags so the vector space reflects the latest
+        semantic state of all memories.
+
+        Uses ChromaDB's update() (via update_note) rather than a full reset,
+        because ChromaDB persists to disk and a reset would be destructive.
+        We batch-fetch all notes and re-upsert their enhanced text.
+        """
+        logger.info("consolidate_memories: rebuilding all note embeddings...")
+        try:
+            total = self._cold.count()
+            if total == 0:
+                return
+            # Fetch all IDs, then batch-get their metadata and re-upsert
+            # ChromaDB doesn't expose a list-all-IDs API directly; we use
+            # get() with a large limit via the underlying collection.
+            result = self._cold._collection.get(
+                include=["documents", "metadatas"],
+                limit=total,
+            )
+            if not result["ids"]:
+                return
+            for i, nid in enumerate(result["ids"]):
+                meta = result["metadatas"][i] if result["metadatas"] else {}
+                import json as _json
+                from datetime import datetime as _dt
+                kw = meta.get("keywords", [])
+                if isinstance(kw, str):
+                    try:
+                        kw = _json.loads(kw)
+                    except Exception:
+                        kw = []
+                tags = meta.get("tags", [])
+                if isinstance(tags, str):
+                    try:
+                        tags = _json.loads(tags)
+                    except Exception:
+                        tags = []
+                ts_raw = meta.get("timestamp", "")
+                try:
+                    ts = _dt.fromisoformat(ts_raw) if ts_raw else _dt.utcnow()
+                except ValueError:
+                    ts = _dt.utcnow()
+                nb_note = MemoryNote(
+                    id=nid,
+                    content=meta.get("content", ""),
+                    keywords=kw,
+                    tags=tags,
+                    context=meta.get("context", ""),
+                    timestamp=ts,
+                )
+                self._cold.update_note(nb_note)
+            logger.info(f"consolidate_memories: rebuilt embeddings for {total} notes")
+        except Exception as e:
+            logger.warning(f"consolidate_memories failed: {e}")
 
     async def update_utility_on_retrieval(
         self,
