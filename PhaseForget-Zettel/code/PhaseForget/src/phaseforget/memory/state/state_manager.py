@@ -109,6 +109,11 @@ class StateManager:
             is_abstract=is_abstract,
         )
 
+        # Build semantic graph edges immediately so graph-expansion retrieval works
+        # even before TriggerEngine runs (or when theta_sum is disabled).
+        # insert_links uses INSERT OR IGNORE, so overlap with TriggerEngine is safe.
+        await self._build_semantic_links(note)
+
         logger.info(f"Created note {note.id} (abstract={is_abstract})")
         return note
 

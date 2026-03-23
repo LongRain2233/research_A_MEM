@@ -502,12 +502,30 @@ class BenchmarkRunner:
                     expanded_query = await self._expand_query(question, metrics=pf_metrics)
                     with RetrievalTimer() as timer:
                         pf_results = await self._system.search_with_graph(expanded_query)
+
+                    # Collect retrieved IDs for utility feedback loop (Research Design §3 M_state)
+                    retrieved_ids = [r["id"] for r in pf_results if r.get("id")]
+
                     prediction = await self._generate_answer(
                         question, pf_results,
                         category=category,
                         reference=reference,
                         metrics=pf_metrics,
                     )
+
+                    # Utility feedback: QA turn itself counts as a new interaction.
+                    # All retrieved notes get r=1 (adopted into LLM context).
+                    # Research Design §3 M_state: u_j ← u_j + η(r_j − u_j), r_j=1
+                    if retrieved_ids:
+                        try:
+                            await self._system.add_interaction(
+                                content=f"[QA] {question}",
+                                retrieved_ids=retrieved_ids,
+                                adopted_ids=retrieved_ids,
+                            )
+                        except Exception as ue:
+                            logger.debug(f"Utility feedback failed: {ue}")
+
                     self._score_with_optional_category(
                         metrics=metrics["PhaseForget"],
                         prediction=prediction,
