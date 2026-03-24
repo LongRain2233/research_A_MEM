@@ -513,13 +513,12 @@ class BenchmarkRunner:
                         metrics=pf_metrics,
                     )
 
-                    # Utility feedback: QA turn itself counts as a new interaction.
-                    # All retrieved notes get r=1 (adopted into LLM context).
+                    # Utility feedback: update utility scores for retrieved notes
+                    # without creating new notes or triggering renorm/decay.
                     # Research Design §3 M_state: u_j ← u_j + η(r_j − u_j), r_j=1
                     if retrieved_ids:
                         try:
-                            await self._system.add_interaction(
-                                content=f"[QA] {question}",
+                            await self._system.update_utility(
                                 retrieved_ids=retrieved_ids,
                                 adopted_ids=retrieved_ids,
                             )

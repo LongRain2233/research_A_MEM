@@ -187,6 +187,28 @@ class PhaseForgetSystem:
 
         return note
 
+    async def update_utility(
+        self,
+        retrieved_ids: list[str],
+        adopted_ids: Optional[list[str]] = None,
+    ) -> None:
+        """
+        Lightweight utility-only update for retrieved notes.
+
+        Use this during QA evaluation to update utility scores WITHOUT
+        creating new notes, triggering renormalization, or applying decay.
+        This keeps the evaluation phase read-only w.r.t. memory structure.
+
+        Args:
+            retrieved_ids: IDs of notes retrieved for this turn's context.
+            adopted_ids:   Subset of retrieved_ids actually used in response.
+        """
+        if retrieved_ids:
+            await self._state_mgr.update_utility_on_retrieval(
+                note_ids=retrieved_ids,
+                adopted_ids=adopted_ids or retrieved_ids,
+            )
+
     async def add_note(
         self,
         content: str,
