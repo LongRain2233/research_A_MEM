@@ -21,6 +21,7 @@ import json
 import logging
 import os
 import random
+import re
 import sys
 import time
 from abc import ABC, abstractmethod
@@ -43,31 +44,27 @@ logger = logging.getLogger(__name__)
 # ── Prompt Templates (aligned with A-MEM evaluation protocol) ──────────
 
 _QUERY_EXPANSION_PROMPT = """\
-Given the following question, generate several search keywords separated by commas.
+Given the following question, generate several keywords separated by commas.
+
 Question: {question}
-Output a JSON object: {{"keywords": "keyword1, keyword2, keyword3"}}"""
+
+Keywords:"""
 
 _ANSWER_PROMPT_DEFAULT = """\
 Based on the context: {context}, write an answer in the form of a short phrase for the following question. Answer with exact words from the context whenever possible.
 
-Question: {question} Short answer:
-
-Respond with a JSON object: {{"answer": "<your short answer>"}}"""
+Question: {question} Short answer:"""
 
 _ANSWER_PROMPT_TEMPORAL = """\
 Based on the context: {context}, answer the following question. Use DATE of CONVERSATION to answer with an approximate date.
 Please generate the shortest possible answer, using words from the conversation where possible, and avoid using any subjects.
 
-Question: {question} Short answer:
-
-Respond with a JSON object: {{"answer": "<your short answer>"}}"""
+Question: {question} Short answer:"""
 
 _ANSWER_PROMPT_ADVERSARIAL = """\
 Based on the context: {context}, answer the following question. {question}
 
-Select the correct answer: {option_a} or {option_b}  Short answer:
-
-Respond with a JSON object: {{"answer": "<selected answer>"}}"""
+Select the correct answer: {option_a} or {option_b}  Short answer:"""
 
 
 class DatasetLoader(ABC):
@@ -163,6 +160,37 @@ class BenchmarkRunner:
         )
         self._sbert_model = None  # lazy-loaded once on first use
 
+    @staticmethod
+    def _parse_plain_or_json(raw: str, *json_keys: str) -> str:
+        """Parse LLM output: try JSON first, fall back to plain text.
+
+        Aligned with A-MEM robust protocol (llm_text_parsers.py).
+        Handles: JSON objects, markdown fences, and raw text.
+        """
+        if not raw or not raw.strip():
+            return ""
+
+        text = raw.strip()
+
+        # Try JSON extraction first
+        # Remove markdown fences
+        cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", text, flags=re.MULTILINE).strip()
+        start = cleaned.find("{")
+        end = cleaned.rfind("}")
+        if start != -1 and end > start:
+            try:
+                data = json.loads(cleaned[start:end + 1])
+                if isinstance(data, dict):
+                    for key in json_keys:
+                        val = data.get(key, "")
+                        if val and str(val).strip():
+                            return str(val).strip()
+            except json.JSONDecodeError:
+                pass
+
+        # Fall back to plain text: return as-is (strip any trailing whitespace)
+        return text.strip()
+
     def register_baseline(self, baseline: BaselineAdapter) -> None:
         """Register a baseline system for comparison."""
         self._baselines.append(baseline)
@@ -179,20 +207,23 @@ class BenchmarkRunner:
         return self._sbert_model
 
     async def _expand_query(self, question: str, metrics: "EvalMetrics | None" = None) -> str:
-        """Extract search keywords from a question via LLM (A-MEM protocol)."""
+        """Extract search keywords from a question via LLM.
+
+        Uses plain-text prompt (no JSON requirement) to maximize compatibility
+        with small models, aligned with A-MEM robust evaluation protocol.
+        """
         if self._llm_client is None:
             return question
         try:
-            result = await self._llm_client.generate_json(
+            raw = await self._llm_client.generate(
                 _QUERY_EXPANSION_PROMPT.format(question=question),
-                system_prompt="You must respond with a JSON object.",
                 temperature=0.1,
                 max_tokens=256,
             )
-            keywords = result.get("keywords", "")
-            if keywords and str(keywords).strip():
-                return str(keywords).strip()
-            # Empty result counts as a parse failure (model returned {} or missing key)
+            # Try JSON parse first (some models still output JSON)
+            keywords = self._parse_plain_or_json(raw, "keywords")
+            if keywords:
+                return keywords
             if metrics is not None:
                 metrics.query_expand_parse_fail += 1
         except Exception as e:
@@ -273,21 +304,20 @@ class BenchmarkRunner:
                 )
 
             try:
-                # Use generate_json + system prompt to enforce structured output,
-                # aligned with A-MEM's response_format={"type": "json_schema"} protocol.
-                result = await self._llm_client.generate_json(
+                # Plain-text generation (no JSON requirement) for maximum
+                # compatibility with small models. Aligned with A-MEM robust
+                # evaluation protocol.
+                raw = await self._llm_client.generate(
                     prompt=prompt,
-                    system_prompt="You must respond with a JSON object.",
                     temperature=temperature,
                     max_tokens=256,
                 )
-                # A-MEM parses: parsed.get("short_answer") or parsed.get("answer")
-                answer = result.get("short_answer") or result.get("answer") or ""
-                if answer and str(answer).strip():
-                    logger.debug(f"LLM generated answer: {str(answer).strip()[:80]}")
-                    return str(answer).strip()
+                answer = self._parse_plain_or_json(raw, "answer", "short_answer")
+                if answer:
+                    logger.debug(f"LLM generated answer: {answer[:80]}")
+                    return answer
                 else:
-                    logger.debug("LLM returned empty JSON answer, using retrieval fallback")
+                    logger.debug("LLM returned empty answer, using retrieval fallback")
                     if metrics is not None:
                         metrics.answer_parse_fail += 1
             except Exception as e:

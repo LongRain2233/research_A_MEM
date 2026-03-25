@@ -183,10 +183,6 @@ class RenormalizationEngine:
         for note_data in scored_notes:
             nid = note_data["id"]
 
-            # Apply penalty to edge nodes not in projected core
-            if nid not in projected_ids:
-                await self._hot.apply_utility_penalty(nid, penalty_factor=0.9)
-
             # Check eviction condition: utility < theta_evict
             utility = await self._hot.get_utility(nid) or 0.0
             if utility >= self._settings.theta_evict:
