@@ -51,6 +51,42 @@ sys.path.insert(0, str(_ROOT / "src"))
 logger = logging.getLogger("hparam_search")
 
 
+def _check_network(timeout: float = 5.0) -> bool:
+    """检查能否连接到 HuggingFace（模型下载源）。"""
+    import socket
+
+    host = "huggingface.co"
+    try:
+        socket.create_connection((host, 443), timeout=timeout)
+        return True
+    except OSError:
+        return False
+
+
+def _ensure_model_cached() -> None:
+    """确保 all-MiniLM-L6-v2 模型已缓存，无网络则提前退出。"""
+    from pathlib import Path
+
+    cache_dir = Path.home() / ".cache" / "huggingface" / "hub"
+    # 模型缓存目录特征：存在 transformers 相关的文件夹
+    marker = cache_dir / "models--sentence-transformers--all-MiniLM-L6-v2"
+    if marker.exists():
+        return  # 已缓存
+
+    if _check_network():
+        # 有网但未缓存，触发下载
+        print("[INFO] 首次运行，正在下载 all-MiniLM-L6-v2 模型（约 90MB）...")
+        print("[INFO] 下载完成后下次运行无需网络。")
+        from sentence_transformers import SentenceTransformer
+
+        SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+        print("[INFO] 模型下载完成！")
+    else:
+        print("[ERROR] 检测不到网络连接（HuggingFace 不可达）")
+        print("[ERROR] 请先开启 VPN 后再运行本脚本")
+        sys.exit(1)
+
+
 # ── 默认搜索空间（较大步长，用于快速定位合理区间）────────────────────────────
 
 DEFAULT_THETA_SIM_VALUES = [0.5, 0.65, 0.75, 0.85]
@@ -550,6 +586,7 @@ def main() -> None:
         if not RESULTS_PATH.is_absolute():
             RESULTS_PATH = _ROOT / RESULTS_PATH
 
+    # 工具命令不需要网络，提前处理
     if args.clear_results:
         if RESULTS_PATH.exists():
             RESULTS_PATH.unlink()
@@ -568,6 +605,9 @@ def main() -> None:
 
     # 切换到脚本所在目录（确保相对路径正确）
     os.chdir(_ROOT)
+
+    # 真正运行实验前检查：确保模型已缓存或网络可用
+    _ensure_model_cached()
 
     asyncio.run(main_async(args))
 
