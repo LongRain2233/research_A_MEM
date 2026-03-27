@@ -44,27 +44,31 @@ logger = logging.getLogger(__name__)
 # ── Prompt Templates (aligned with A-MEM evaluation protocol) ──────────
 
 _QUERY_EXPANSION_PROMPT = """\
-Given the following question, generate several keywords separated by commas.
-
+Given the following question, generate several search keywords separated by commas.
 Question: {question}
-
-Keywords:"""
+Output a JSON object: {{"keywords": "keyword1, keyword2, keyword3"}}"""
 
 _ANSWER_PROMPT_DEFAULT = """\
 Based on the context: {context}, write an answer in the form of a short phrase for the following question. Answer with exact words from the context whenever possible.
 
-Question: {question} Short answer:"""
+Question: {question} Short answer:
+
+Respond with a JSON object: {{"answer": "<your short answer>"}}"""
 
 _ANSWER_PROMPT_TEMPORAL = """\
 Based on the context: {context}, answer the following question. Use DATE of CONVERSATION to answer with an approximate date.
 Please generate the shortest possible answer, using words from the conversation where possible, and avoid using any subjects.
 
-Question: {question} Short answer:"""
+Question: {question} Short answer:
+
+Respond with a JSON object: {{"answer": "<your short answer>"}}"""
 
 _ANSWER_PROMPT_ADVERSARIAL = """\
 Based on the context: {context}, answer the following question. {question}
 
-Select the correct answer: {option_a} or {option_b}  Short answer:"""
+Select the correct answer: {option_a} or {option_b}  Short answer:
+
+Respond with a JSON object: {{"answer": "<selected answer>"}}"""
 
 
 class DatasetLoader(ABC):
@@ -207,23 +211,20 @@ class BenchmarkRunner:
         return self._sbert_model
 
     async def _expand_query(self, question: str, metrics: "EvalMetrics | None" = None) -> str:
-        """Extract search keywords from a question via LLM.
-
-        Uses plain-text prompt (no JSON requirement) to maximize compatibility
-        with small models, aligned with A-MEM robust evaluation protocol.
-        """
+        """Extract search keywords from a question via LLM (A-MEM protocol)."""
         if self._llm_client is None:
             return question
         try:
-            raw = await self._llm_client.generate(
+            result = await self._llm_client.generate_json(
                 _QUERY_EXPANSION_PROMPT.format(question=question),
+                system_prompt="You must respond with a JSON object.",
                 temperature=0.1,
                 max_tokens=256,
             )
-            # Try JSON parse first (some models still output JSON)
-            keywords = self._parse_plain_or_json(raw, "keywords")
-            if keywords:
-                return keywords
+            keywords = result.get("keywords", "")
+            if keywords and str(keywords).strip():
+                return str(keywords).strip()
+            # Empty result counts as a parse failure (model returned {} or missing key)
             if metrics is not None:
                 metrics.query_expand_parse_fail += 1
         except Exception as e:
@@ -304,20 +305,22 @@ class BenchmarkRunner:
                 )
 
             try:
-                # Plain-text generation (no JSON requirement) for maximum
-                # compatibility with small models. Aligned with A-MEM robust
-                # evaluation protocol.
-                raw = await self._llm_client.generate(
+                # Use generate_json to enforce structured short-answer output.
+                # This is critical: without JSON mode, the model outputs long
+                # paragraphs that destroy F1 scores. With JSON mode, the model
+                # outputs {"answer": "Max"} which parses to a concise answer.
+                result = await self._llm_client.generate_json(
                     prompt=prompt,
+                    system_prompt="You must respond with a JSON object.",
                     temperature=temperature,
                     max_tokens=256,
                 )
-                answer = self._parse_plain_or_json(raw, "answer", "short_answer")
-                if answer:
-                    logger.debug(f"LLM generated answer: {answer[:80]}")
-                    return answer
+                answer = result.get("short_answer") or result.get("answer") or ""
+                if answer and str(answer).strip():
+                    logger.debug(f"LLM generated answer: {str(answer).strip()[:80]}")
+                    return str(answer).strip()
                 else:
-                    logger.debug("LLM returned empty answer, using retrieval fallback")
+                    logger.debug("LLM returned empty JSON answer, using retrieval fallback")
                     if metrics is not None:
                         metrics.answer_parse_fail += 1
             except Exception as e:
@@ -533,27 +536,12 @@ class BenchmarkRunner:
                     with RetrievalTimer() as timer:
                         pf_results = await self._system.search_with_graph(expanded_query)
 
-                    # Collect retrieved IDs for utility feedback loop (Research Design §3 M_state)
-                    retrieved_ids = [r["id"] for r in pf_results if r.get("id")]
-
                     prediction = await self._generate_answer(
                         question, pf_results,
                         category=category,
                         reference=reference,
                         metrics=pf_metrics,
                     )
-
-                    # Utility feedback: update utility scores for retrieved notes
-                    # without creating new notes or triggering renorm/decay.
-                    # Research Design §3 M_state: u_j ← u_j + η(r_j − u_j), r_j=1
-                    if retrieved_ids:
-                        try:
-                            await self._system.update_utility(
-                                retrieved_ids=retrieved_ids,
-                                adopted_ids=retrieved_ids,
-                            )
-                        except Exception as ue:
-                            logger.debug(f"Utility feedback failed: {ue}")
 
                     self._score_with_optional_category(
                         metrics=metrics["PhaseForget"],
