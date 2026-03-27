@@ -18,6 +18,7 @@ Data Flow (per interaction round):
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Optional
 
@@ -175,7 +176,9 @@ class PhaseForgetSystem:
                 f"[Round {self._interaction_count}] Renorm triggered: "
                 f"anchor={trigger_result.anchor_v}"
             )
-            await self._safe_renormalize(trigger_result.anchor_v)
+            asyncio.create_task(
+                self._safe_renormalize(trigger_result.anchor_v)
+            )
 
         # Step 4: Periodic global decay
         if self._interaction_count % self._settings.decay_interval_rounds == 0:
@@ -183,28 +186,6 @@ class PhaseForgetSystem:
             await self._state_mgr.apply_global_decay()
 
         return note
-
-    async def update_utility(
-        self,
-        retrieved_ids: list[str],
-        adopted_ids: Optional[list[str]] = None,
-    ) -> None:
-        """
-        Lightweight utility-only update for retrieved notes.
-
-        Use this during QA evaluation to update utility scores WITHOUT
-        creating new notes, triggering renormalization, or applying decay.
-        This keeps the evaluation phase read-only w.r.t. memory structure.
-
-        Args:
-            retrieved_ids: IDs of notes retrieved for this turn's context.
-            adopted_ids:   Subset of retrieved_ids actually used in response.
-        """
-        if retrieved_ids:
-            await self._state_mgr.update_utility_on_retrieval(
-                note_ids=retrieved_ids,
-                adopted_ids=adopted_ids or retrieved_ids,
-            )
 
     async def add_note(
         self,
@@ -274,10 +255,9 @@ class PhaseForgetSystem:
         This restores the graph traversal capability that A-MEM uses at QA time.
         """
         k = top_k or self._settings.retrieval_top_k
-        # Request extra candidates so we still have enough after filtering
         seed_hits = self._cold.search(
             query_text=query,
-            top_k=k + 10,
+            top_k=k,
             min_similarity=self._settings.search_min_similarity or None,
         )
 
@@ -287,28 +267,14 @@ class PhaseForgetSystem:
         seen_ids: set[str] = set()
         ordered_results: list[dict] = []
 
-        # Filter out abstract (Sigma/Delta) notes from seed results.
-        # Abstract notes are broad summaries that match many queries but lack
-        # the specific details needed for QA.  They still contribute through
-        # graph expansion (as link hubs) without occupying top-K slots.
-        seed_count = 0
-        filtered_seeds: list[dict] = []
         for hit in seed_hits:
             hid = hit["id"]
-            if hid in seen_ids:
-                continue
-            seen_ids.add(hid)
-            meta = hit.get("metadata", {})
-            if str(meta.get("is_abstract", "False")).lower() == "true":
-                continue
-            ordered_results.append(hit)
-            filtered_seeds.append(hit)
-            seed_count += 1
-            if seed_count >= k:
-                break
+            if hid not in seen_ids:
+                seen_ids.add(hid)
+                ordered_results.append(hit)
 
         neighbor_ids_to_fetch: list[str] = []
-        for hit in filtered_seeds:
+        for hit in seed_hits:
             try:
                 neighbors = await self._hot.get_first_degree_neighbors(hit["id"])
                 for nid in neighbors:
@@ -321,16 +287,13 @@ class PhaseForgetSystem:
         if neighbor_ids_to_fetch:
             neighbor_notes = self._cold.get_by_ids(neighbor_ids_to_fetch)
             for note_data in neighbor_notes:
-                # Also skip abstract notes from graph expansion
-                meta = note_data.get("metadata", {})
-                if str(meta.get("is_abstract", "False")).lower() == "true":
-                    continue
                 content = note_data.get("content", "")
+                metadata = note_data.get("metadata", {})
                 ordered_results.append({
                     "id": note_data["id"],
                     "score": 0.0,
                     "content": content,
-                    "metadata": meta,
+                    "metadata": metadata,
                 })
 
         return ordered_results

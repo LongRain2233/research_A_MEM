@@ -183,16 +183,18 @@ class RenormalizationEngine:
         for note_data in scored_notes:
             nid = note_data["id"]
 
+            # Apply penalty to edge nodes not in projected core
+            if nid not in projected_ids:
+                await self._hot.apply_utility_penalty(nid, penalty_factor=0.9)
+
             # Check eviction condition: utility < theta_evict
             utility = await self._hot.get_utility(nid) or 0.0
             if utility >= self._settings.theta_evict:
                 continue
 
-            # Entailment gate: check if Sigma logically covers this note.
-            # Use raw original content from metadata, not the enhanced embedding text.
-            raw_content = note_data.get("metadata", {}).get("content", note_data.get("content", ""))
+            # Entailment gate: check if Sigma logically covers this note
             entailment = await self._check_entailment(
-                premise=raw_content,
+                premise=note_data.get("content", ""),
                 hypothesis=sigma_text,
             )
             if not entailment:
@@ -230,27 +232,13 @@ class RenormalizationEngine:
 
     @staticmethod
     def _format_notes_for_llm(notes: list[dict]) -> str:
-        """Format projected notes into a text block for the renormalization prompt.
-        Uses raw original content from metadata (not the enhanced embedding text)
-        so the LLM sees clean conversation text rather than keyword-stuffed vectors.
-        """
+        """Format projected notes into a text block for the renormalization prompt."""
         lines = []
         for i, note in enumerate(notes, 1):
             abs_flag = " [ABSTRACT]" if note.get("is_abstract") else ""
             utility = note.get("utility", 0.0)
-            # Prefer metadata["content"] (raw text); fall back to top-level "content"
-            meta = note.get("metadata", {})
-            content = meta.get("content", note.get("content", ""))
-            ctx = meta.get("context", "")
-            kw = meta.get("keywords", "")
-            if isinstance(kw, list):
-                kw = ", ".join(kw)
-            note_text = content
-            if ctx:
-                note_text += f"\n[context: {ctx}]"
-            if kw:
-                note_text += f"\n[keywords: {kw}]"
+            content = note.get("content", note.get("metadata", {}).get("content", ""))
             lines.append(
-                f"[Note {i}]{abs_flag} (utility={utility:.2f})\n{note_text}"
+                f"[Note {i}]{abs_flag} (utility={utility:.2f})\n{content}"
             )
         return "\n\n---\n\n".join(lines)

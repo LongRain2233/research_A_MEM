@@ -21,7 +21,6 @@ import json
 import logging
 import os
 import random
-import re
 import sys
 import time
 from abc import ABC, abstractmethod
@@ -164,37 +163,6 @@ class BenchmarkRunner:
         )
         self._sbert_model = None  # lazy-loaded once on first use
 
-    @staticmethod
-    def _parse_plain_or_json(raw: str, *json_keys: str) -> str:
-        """Parse LLM output: try JSON first, fall back to plain text.
-
-        Aligned with A-MEM robust protocol (llm_text_parsers.py).
-        Handles: JSON objects, markdown fences, and raw text.
-        """
-        if not raw or not raw.strip():
-            return ""
-
-        text = raw.strip()
-
-        # Try JSON extraction first
-        # Remove markdown fences
-        cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", text, flags=re.MULTILINE).strip()
-        start = cleaned.find("{")
-        end = cleaned.rfind("}")
-        if start != -1 and end > start:
-            try:
-                data = json.loads(cleaned[start:end + 1])
-                if isinstance(data, dict):
-                    for key in json_keys:
-                        val = data.get(key, "")
-                        if val and str(val).strip():
-                            return str(val).strip()
-            except json.JSONDecodeError:
-                pass
-
-        # Fall back to plain text: return as-is (strip any trailing whitespace)
-        return text.strip()
-
     def register_baseline(self, baseline: BaselineAdapter) -> None:
         """Register a baseline system for comparison."""
         self._baselines.append(baseline)
@@ -305,16 +273,15 @@ class BenchmarkRunner:
                 )
 
             try:
-                # Use generate_json to enforce structured short-answer output.
-                # This is critical: without JSON mode, the model outputs long
-                # paragraphs that destroy F1 scores. With JSON mode, the model
-                # outputs {"answer": "Max"} which parses to a concise answer.
+                # Use generate_json + system prompt to enforce structured output,
+                # aligned with A-MEM's response_format={"type": "json_schema"} protocol.
                 result = await self._llm_client.generate_json(
                     prompt=prompt,
                     system_prompt="You must respond with a JSON object.",
                     temperature=temperature,
                     max_tokens=256,
                 )
+                # A-MEM parses: parsed.get("short_answer") or parsed.get("answer")
                 answer = result.get("short_answer") or result.get("answer") or ""
                 if answer and str(answer).strip():
                     logger.debug(f"LLM generated answer: {str(answer).strip()[:80]}")
@@ -535,14 +502,12 @@ class BenchmarkRunner:
                     expanded_query = await self._expand_query(question, metrics=pf_metrics)
                     with RetrievalTimer() as timer:
                         pf_results = await self._system.search_with_graph(expanded_query)
-
                     prediction = await self._generate_answer(
                         question, pf_results,
                         category=category,
                         reference=reference,
                         metrics=pf_metrics,
                     )
-
                     self._score_with_optional_category(
                         metrics=metrics["PhaseForget"],
                         prediction=prediction,
