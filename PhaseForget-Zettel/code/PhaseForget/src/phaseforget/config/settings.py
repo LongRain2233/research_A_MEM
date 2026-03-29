@@ -60,7 +60,7 @@ class Settings(BaseSettings):
     # ── Decay Parameters (Silent Node Anti-Freeze) ───────────────────────
 
     decay_interval_rounds: int = Field(
-        default=100,
+        default=50,
         description="Apply global decay every N interaction rounds"
     )
     decay_factor: float = Field(

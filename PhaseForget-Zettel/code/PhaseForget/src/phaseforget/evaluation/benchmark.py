@@ -21,6 +21,7 @@ import json
 import logging
 import os
 import random
+import re
 import sys
 import time
 from abc import ABC, abstractmethod
@@ -299,6 +300,55 @@ class BenchmarkRunner:
         logger.debug(f"Using retrieval fallback answer (len={len(fallback)}): {fallback[:80]}")
         return fallback
 
+    @staticmethod
+    def _tokenize_text(text: str) -> set[str]:
+        """Lightweight tokenizer for lexical-overlap based adoption inference."""
+        if not text:
+            return set()
+        return set(re.findall(r"\w+", text.lower()))
+
+    def _infer_adopted_ids(
+        self,
+        retrieved: list[dict],
+        prediction: str,
+        max_adopted: int = 3,
+    ) -> list[str]:
+        """
+        Infer which retrieved notes were likely adopted in the final answer.
+
+        Strategy: lexical overlap between prediction tokens and note content.
+        Falls back to top-1 retrieved note when prediction is non-empty but
+        overlap is zero, to avoid starving utility updates.
+        """
+        pred_tokens = self._tokenize_text(prediction)
+        if not retrieved:
+            return []
+
+        scored: list[tuple[str, float]] = []
+        for r in retrieved:
+            nid = r.get("id")
+            if not nid:
+                continue
+            meta = r.get("metadata", {})
+            note_text = meta.get("content", r.get("content", "")) or ""
+            note_tokens = self._tokenize_text(note_text)
+            if not pred_tokens or not note_tokens:
+                overlap = 0.0
+            else:
+                overlap = len(pred_tokens & note_tokens) / len(pred_tokens)
+            scored.append((nid, overlap))
+
+        if not scored:
+            return []
+
+        scored.sort(key=lambda x: x[1], reverse=True)
+        adopted = [nid for nid, score in scored if score > 0][:max_adopted]
+
+        if not adopted and prediction.strip():
+            adopted = [scored[0][0]]
+
+        return adopted
+
     def _score_all(self, prediction: str, reference: str, metrics: EvalMetrics) -> None:
         """Compute all 6 QA metrics and append to the metrics object."""
         metrics.f1_scores.append(compute_f1(prediction, reference))
@@ -465,8 +515,29 @@ class BenchmarkRunner:
                 if date_time:
                     content = f"[{date_time}] {content}"
 
+                # Self-Retrieval: 在写入新记忆前，先用当前对话内容检索历史记忆，
+                # 模拟"新信息唤起相关记忆"的自然过程，使效用分数在构建阶段就能更新。
+                # 第一轮（turn_idx=0）库为空，跳过检索直接写入。
+                retrieved_ids: list[str] = []
+                adopted_ids: list[str] = []
+                if turn_idx > 0:
+                    try:
+                        recalled = await self._system.search_with_graph(
+                            content, top_k=3
+                        )
+                        retrieved_ids = [r["id"] for r in recalled if r.get("id")]
+                        # Top-1 相关记忆推断为被采纳（启发式规则：最相关的是本轮的背景知识）
+                        if retrieved_ids:
+                            adopted_ids = [retrieved_ids[0]]
+                    except Exception as e:
+                        logger.debug(f"Self-retrieval skipped at turn {turn_idx}: {e}")
+
                 try:
-                    await self._system.add_interaction(content=content)
+                    await self._system.add_interaction(
+                        content=content,
+                        retrieved_ids=retrieved_ids or None,
+                        adopted_ids=adopted_ids or None,
+                    )
                 except Exception as e:
                     logger.error(
                         f"PhaseForget failed on session={session_id} turn={turn_idx}: {e}",
@@ -488,6 +559,11 @@ class BenchmarkRunner:
                         metrics["PhaseForget"].memory_usage_mb.append(mem_mb)
 
             # ── Phase 2: Evaluate QA questions ────────────────────────
+            try:
+                await self._system.wait_for_pending_renorm()
+            except Exception as e:
+                logger.debug(f"Failed while waiting pending renorm before QA: {e}")
+
             for qa in questions:
                 question = qa.get("question", "")
                 reference = qa.get("answer", "")
@@ -507,6 +583,12 @@ class BenchmarkRunner:
                         category=category,
                         reference=reference,
                         metrics=pf_metrics,
+                    )
+                    retrieved_ids = [r.get("id") for r in pf_results if r.get("id")]
+                    adopted_ids = self._infer_adopted_ids(pf_results, prediction)
+                    await self._system.update_retrieval_feedback(
+                        note_ids=retrieved_ids,
+                        adopted_ids=adopted_ids,
                     )
                     self._score_with_optional_category(
                         metrics=metrics["PhaseForget"],

@@ -92,6 +92,7 @@ def _ensure_model_cached() -> None:
 DEFAULT_THETA_SIM_VALUES = [0.5, 0.65, 0.75, 0.85]
 DEFAULT_THETA_SUM_VALUES = [3, 5, 8, 12]
 DEFAULT_THETA_EVICT_VALUES = [0.15, 0.3, 0.45, 0.6]
+DEFAULT_DECAY_INTERVAL_VALUES = [50]
 
 
 # ── 结果存储路径 ────────────────────────────────────────────────────────────
@@ -133,6 +134,7 @@ async def run_single_trial(
     theta_sim: float,
     theta_sum: int,
     theta_evict: float,
+    decay_interval_rounds: int,
     record_indices: list[int],
     data_path: str,
     trial_id: str,
@@ -159,6 +161,7 @@ async def run_single_trial(
         "THETA_SIM": str(theta_sim),
         "THETA_SUM": str(theta_sum),
         "THETA_EVICT": str(theta_evict),
+        "DECAY_INTERVAL_ROUNDS": str(decay_interval_rounds),
         "CHROMA_PERSIST_DIR": f"./data/{experiment_id}/chroma_db",
         "SQLITE_DB_PATH": f"./data/{experiment_id}/phaseforget.db",
         "LOG_LEVEL": "WARNING",
@@ -181,6 +184,7 @@ async def run_single_trial(
             theta_sim=theta_sim,
             theta_sum=theta_sum,
             theta_evict=theta_evict,
+            decay_interval_rounds=decay_interval_rounds,
             chroma_persist_dir=f"./data/{experiment_id}/chroma_db",
             sqlite_db_path=f"./data/{experiment_id}/phaseforget.db",
             log_level="WARNING",
@@ -260,6 +264,7 @@ async def run_single_trial(
             "theta_sim": theta_sim,
             "theta_sum": theta_sum,
             "theta_evict": theta_evict,
+            "decay_interval_rounds": decay_interval_rounds,
         },
         "record_indices": record_indices,
         "metrics": result_metrics,
@@ -273,11 +278,19 @@ def build_grid(
     theta_sim_values: list[float],
     theta_sum_values: list[int],
     theta_evict_values: list[float],
+    decay_interval_values: list[int],
 ) -> list[dict]:
     """生成笛卡尔积网格搜索参数组合列表。"""
     combos = []
-    for ts, tsum, te in itertools.product(theta_sim_values, theta_sum_values, theta_evict_values):
-        combos.append({"theta_sim": ts, "theta_sum": tsum, "theta_evict": te})
+    for ts, tsum, te, decay_intv in itertools.product(
+        theta_sim_values, theta_sum_values, theta_evict_values, decay_interval_values
+    ):
+        combos.append({
+            "theta_sim": ts,
+            "theta_sum": tsum,
+            "theta_evict": te,
+            "decay_interval_rounds": decay_intv,
+        })
     return combos
 
 
@@ -285,12 +298,15 @@ def build_random(
     theta_sim_values: list[float],
     theta_sum_values: list[int],
     theta_evict_values: list[float],
+    decay_interval_values: list[int],
     n_trials: int,
     seed: int = 42,
 ) -> list[dict]:
     """随机采样参数组合。"""
     rng = random.Random(seed)
-    all_combos = build_grid(theta_sim_values, theta_sum_values, theta_evict_values)
+    all_combos = build_grid(
+        theta_sim_values, theta_sum_values, theta_evict_values, decay_interval_values
+    )
     if n_trials >= len(all_combos):
         return all_combos
     return rng.sample(all_combos, n_trials)
@@ -309,7 +325,7 @@ def print_leaderboard(results: list[dict], top_n: int = 10) -> None:
     print(f"  超参数搜索排行榜 (Top {min(top_n, len(sorted_results))})")
     print("=" * 100)
     print(
-        f"{'排名':<4} {'theta_sim':>10} {'theta_sum':>10} {'theta_evict':>12} "
+        f"{'排名':<4} {'theta_sim':>10} {'theta_sum':>10} {'theta_evict':>12} {'decay':>8} "
         f"{'综合分':>8} {'F1':>8} {'ROUGE-L':>8} {'METEOR':>8} {'BLEU':>8} "
         f"{'样本数':>6} {'耗时(s)':>8}"
     )
@@ -320,6 +336,7 @@ def print_leaderboard(results: list[dict], top_n: int = 10) -> None:
         m = r["metrics"]
         print(
             f"{rank:<4} {p['theta_sim']:>10.2f} {p['theta_sum']:>10} {p['theta_evict']:>12.2f} "
+            f"{p.get('decay_interval_rounds', DEFAULT_DECAY_INTERVAL_VALUES[0]):>8} "
             f"{r['composite_score']:>8.4f} {m.get('avg_f1', 0):>8.4f} "
             f"{m.get('avg_rouge_l', 0):>8.4f} {m.get('avg_meteor', 0):>8.4f} "
             f"{m.get('avg_bleu', 0):>8.4f} {m.get('n_questions', 0):>6} "
@@ -336,10 +353,12 @@ def print_leaderboard(results: list[dict], top_n: int = 10) -> None:
         print(f"  theta_sim   = {bp['theta_sim']}")
         print(f"  theta_sum   = {bp['theta_sum']}")
         print(f"  theta_evict = {bp['theta_evict']}")
+        print(f"  decay_intv  = {bp.get('decay_interval_rounds', DEFAULT_DECAY_INTERVAL_VALUES[0])}")
         print(f"\n对应的 .env 配置：")
         print(f"  THETA_SIM={bp['theta_sim']}")
         print(f"  THETA_SUM={bp['theta_sum']}")
         print(f"  THETA_EVICT={bp['theta_evict']}")
+        print(f"  DECAY_INTERVAL_ROUNDS={bp.get('decay_interval_rounds', DEFAULT_DECAY_INTERVAL_VALUES[0])}")
 
         # 显示按类别的细分指标
         by_cat = bm.get("by_category", {})
@@ -390,13 +409,20 @@ async def main_async(args: argparse.Namespace) -> None:
     theta_sim_values = parse_floats(args.theta_sim_values) if args.theta_sim_values else DEFAULT_THETA_SIM_VALUES
     theta_sum_values = parse_ints(args.theta_sum_values) if args.theta_sum_values else DEFAULT_THETA_SUM_VALUES
     theta_evict_values = parse_floats(args.theta_evict_values) if args.theta_evict_values else DEFAULT_THETA_EVICT_VALUES
+    decay_interval_values = (
+        parse_ints(args.decay_interval_values)
+        if args.decay_interval_values
+        else DEFAULT_DECAY_INTERVAL_VALUES
+    )
 
     # 构建参数组合
     if args.search_type == "grid":
-        combos = build_grid(theta_sim_values, theta_sum_values, theta_evict_values)
+        combos = build_grid(
+            theta_sim_values, theta_sum_values, theta_evict_values, decay_interval_values
+        )
     else:
         combos = build_random(
-            theta_sim_values, theta_sum_values, theta_evict_values,
+            theta_sim_values, theta_sum_values, theta_evict_values, decay_interval_values,
             n_trials=args.n_trials, seed=args.seed
         )
 
@@ -409,6 +435,7 @@ async def main_async(args: argparse.Namespace) -> None:
     print(f"  theta_sim    : {theta_sim_values}")
     print(f"  theta_sum    : {theta_sum_values}")
     print(f"  theta_evict  : {theta_evict_values}")
+    print(f"  decay_intv   : {decay_interval_values}")
     print(f"  数据集记录   : {record_indices if record_indices else '全部(0-9)'}")
     print(f"  包含对抗题   : {args.include_adversarial}")
     print(f"  数据集路径   : {args.data_path}")
@@ -418,25 +445,40 @@ async def main_async(args: argparse.Namespace) -> None:
     # 加载已有结果（支持断点续搜）
     all_results = _load_existing_results()
     completed_keys = {
-        (r["params"]["theta_sim"], r["params"]["theta_sum"], r["params"]["theta_evict"])
+        (
+            r["params"]["theta_sim"],
+            r["params"]["theta_sum"],
+            r["params"]["theta_evict"],
+            r["params"].get("decay_interval_rounds", DEFAULT_DECAY_INTERVAL_VALUES[0]),
+        )
         for r in all_results
         if r.get("record_indices") == record_indices
     }
 
     pending = [
         c for c in combos
-        if (c["theta_sim"], c["theta_sum"], c["theta_evict"]) not in completed_keys
+        if (
+            c["theta_sim"],
+            c["theta_sum"],
+            c["theta_evict"],
+            c["decay_interval_rounds"],
+        ) not in completed_keys
     ]
     skipped = total - len(pending)
     if skipped > 0:
         print(f"[断点续搜] 已跳过 {skipped} 组已完成的组合，剩余 {len(pending)} 组。\n")
 
     for trial_num, combo in enumerate(pending, skipped + 1):
-        ts, tsum, te = combo["theta_sim"], combo["theta_sum"], combo["theta_evict"]
-        trial_id = f"{ts:.2f}_{tsum}_{te:.2f}_{int(time.time())}"
+        ts, tsum, te, decay_intv = (
+            combo["theta_sim"],
+            combo["theta_sum"],
+            combo["theta_evict"],
+            combo["decay_interval_rounds"],
+        )
+        trial_id = f"{ts:.2f}_{tsum}_{te:.2f}_{decay_intv}_{int(time.time())}"
 
         print(
-            f"[{trial_num}/{total}] theta_sim={ts} theta_sum={tsum} theta_evict={te} "
+            f"[{trial_num}/{total}] theta_sim={ts} theta_sum={tsum} theta_evict={te} decay={decay_intv} "
             f"  开始时间: {datetime.now().strftime('%H:%M:%S')}"
         )
 
@@ -444,6 +486,7 @@ async def main_async(args: argparse.Namespace) -> None:
             theta_sim=ts,
             theta_sum=tsum,
             theta_evict=te,
+            decay_interval_rounds=decay_intv,
             record_indices=record_indices,
             data_path=args.data_path,
             trial_id=trial_id,
@@ -553,6 +596,15 @@ def main() -> None:
         type=str,
         default=None,
         help=f"theta_evict 候选值，逗号分隔（默认: {','.join(map(str, DEFAULT_THETA_EVICT_VALUES))}）",
+    )
+    parser.add_argument(
+        "--decay-interval-values",
+        type=str,
+        default=None,
+        help=(
+            "decay_interval_rounds 候选值，逗号分隔"
+            f"（默认: {','.join(map(str, DEFAULT_DECAY_INTERVAL_VALUES))}）"
+        ),
     )
 
     # ── 工具命令 ──────────────────────────────────────────────────────────

@@ -64,6 +64,7 @@ class PhaseForgetSystem:
         self._state_mgr: Optional[StateManager] = None
         self._trigger: Optional[TriggerEngine] = None
         self._renorm: Optional[RenormalizationEngine] = None
+        self._pending_renorm_tasks: set[asyncio.Task] = set()
 
     async def initialize(self) -> None:
         """
@@ -120,6 +121,7 @@ class PhaseForgetSystem:
 
     async def close(self) -> None:
         """Shutdown and release resources."""
+        await self.wait_for_pending_renorm()
         if self._hot:
             await self._hot.close()
         logger.info("PhaseForgetSystem closed")
@@ -176,9 +178,9 @@ class PhaseForgetSystem:
                 f"[Round {self._interaction_count}] Renorm triggered: "
                 f"anchor={trigger_result.anchor_v}"
             )
-            asyncio.create_task(
-                self._safe_renormalize(trigger_result.anchor_v)
-            )
+            task = asyncio.create_task(self._safe_renormalize(trigger_result.anchor_v))
+            self._pending_renorm_tasks.add(task)
+            task.add_done_callback(self._pending_renorm_tasks.discard)
 
         # Step 4: Periodic global decay
         if self._interaction_count % self._settings.decay_interval_rounds == 0:
@@ -216,6 +218,39 @@ class PhaseForgetSystem:
     async def force_renormalize(self, anchor_v: str) -> Optional[RenormResult]:
         """Manually trigger renormalization on a specific anchor. For testing."""
         return await self._renorm.execute(anchor_v)
+
+    async def wait_for_pending_renorm(self) -> int:
+        """
+        Wait until all currently scheduled renormalization tasks are finished.
+
+        Returns:
+            Number of tasks that were pending when this wait started.
+        """
+        if not self._pending_renorm_tasks:
+            return 0
+
+        pending = list(self._pending_renorm_tasks)
+        await asyncio.gather(*pending, return_exceptions=True)
+        return len(pending)
+
+    async def update_retrieval_feedback(
+        self,
+        note_ids: list[str],
+        adopted_ids: list[str],
+    ) -> None:
+        """
+        Public API for utility feedback updates from evaluation/retrieval loops.
+
+        Args:
+            note_ids: Retrieved note IDs used as candidate evidence.
+            adopted_ids: Subset of note_ids deemed actually used in response.
+        """
+        if not note_ids:
+            return
+        await self._state_mgr.update_utility_on_retrieval(
+            note_ids=note_ids,
+            adopted_ids=adopted_ids,
+        )
 
     def search(
         self,
