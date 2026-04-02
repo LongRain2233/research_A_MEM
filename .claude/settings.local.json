@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls:*)",
+      "Bash(\"D:\\\\research\\\\research_A_MEM\\\\PhaseForget-Zettel\\\\code\\\\PhaseForget\\\\docs\\\\修改说明\\\\修改1.md\":*)",
+      "Bash(\"D:\\\\research\\\\research_A_MEM\\\\PhaseForget-Zettel\\\\code\\\\PhaseForget\\\\docs\\\\修改说明\\\\修改总览.md\":*)",
+      "Bash(wc:*)"
+    ]
+  }
+}

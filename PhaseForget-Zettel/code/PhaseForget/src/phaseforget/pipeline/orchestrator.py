@@ -278,6 +278,7 @@ class PhaseForgetSystem:
         self,
         query: str,
         top_k: Optional[int] = None,
+        max_abstract_ratio: float = 0.3,
     ) -> list[dict]:
         """
         Search with link-graph expansion (aligned with A-MEM find_related_memories_raw).
@@ -286,6 +287,9 @@ class PhaseForgetSystem:
         2. For each hit, fetch first-degree neighbors from the Zettel link topology.
         3. Retrieve neighbor content from ChromaDB.
         4. Merge and deduplicate, preserving original Top-K order first.
+        5. Limit abstract (Sigma/Delta) nodes to *max_abstract_ratio* of results
+           so that synthesized summaries do not dilute concrete factual evidence
+           needed for temporal and multi-hop reasoning.
 
         This restores the graph traversal capability that A-MEM uses at QA time.
         """
@@ -331,7 +335,26 @@ class PhaseForgetSystem:
                     "metadata": metadata,
                 })
 
-        return ordered_results
+        # ── Abstract node ratio cap ───────────────────────────────────────
+        # Separate concrete vs abstract results, then limit abstract count
+        # to avoid diluting factual evidence with synthesized summaries.
+        concrete: list[dict] = []
+        abstract: list[dict] = []
+        for r in ordered_results:
+            rid = r["id"]
+            try:
+                is_abs = await self._hot.is_abstract(rid)
+            except Exception:
+                is_abs = False
+            if is_abs:
+                abstract.append(r)
+            else:
+                concrete.append(r)
+
+        max_abs = max(1, int(len(ordered_results) * max_abstract_ratio))
+        capped_results = concrete + abstract[:max_abs]
+
+        return capped_results
 
     async def get_stats(self) -> dict:
         """Get system statistics (all values read from persistent storage)."""

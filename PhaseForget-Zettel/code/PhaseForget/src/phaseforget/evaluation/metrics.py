@@ -9,7 +9,6 @@ Aligns with Research Design §7.2:
 from __future__ import annotations
 
 import time
-from collections import Counter
 from dataclasses import dataclass, field
 
 
@@ -118,46 +117,71 @@ class EvalMetrics:
         return m
 
 
+def _simple_tokenize(text: str) -> list[str]:
+    """Tokenize matching A-MEM's simple_tokenize: lowercase + strip punctuation."""
+    text = str(text).lower()
+    for ch in (".", ",", "!", "?"):
+        text = text.replace(ch, " ")
+    return text.split()
+
+
 def compute_f1(prediction: str, reference: str) -> float:
-    """Token-level F1 score between prediction and reference strings."""
-    pred_tokens = prediction.lower().split()
-    ref_tokens = reference.lower().split()
+    """
+    Set-based token-level F1 score (aligned with A-MEM utils.py).
+
+    Uses set() intersection (not Counter) so duplicate tokens are
+    collapsed, and strips common punctuation before splitting.
+    """
+    pred_tokens = set(_simple_tokenize(prediction))
+    ref_tokens = set(_simple_tokenize(reference))
 
     if not pred_tokens or not ref_tokens:
         return 0.0
 
-    common = Counter(pred_tokens) & Counter(ref_tokens)
-    num_common = sum(common.values())
+    common_tokens = pred_tokens & ref_tokens
 
-    if num_common == 0:
+    if not common_tokens:
         return 0.0
 
-    precision = num_common / len(pred_tokens)
-    recall = num_common / len(ref_tokens)
+    precision = len(common_tokens) / len(pred_tokens)
+    recall = len(common_tokens) / len(ref_tokens)
     return 2 * precision * recall / (precision + recall)
 
 
 def compute_bleu1(prediction: str, reference: str) -> float:
-    """Unigram BLEU (BLEU-1) score."""
-    pred_tokens = prediction.lower().split()
-    ref_tokens = reference.lower().split()
+    """
+    BLEU-1 score using nltk sentence_bleu with smoothing (aligned with A-MEM).
 
-    if not pred_tokens or not ref_tokens:
+    A-MEM uses nltk.translate.bleu_score.sentence_bleu with
+    SmoothingFunction().method1 and unigram weights (1,0,0,0).
+    """
+    try:
+        import nltk
+        from nltk.translate.bleu_score import SmoothingFunction, sentence_bleu
+
+        pred_tokens = nltk.word_tokenize(prediction.lower())
+        ref_tokens = [nltk.word_tokenize(reference.lower())]
+
+        if not pred_tokens or not ref_tokens[0]:
+            return 0.0
+
+        return float(
+            sentence_bleu(
+                ref_tokens,
+                pred_tokens,
+                weights=(1, 0, 0, 0),
+                smoothing_function=SmoothingFunction().method1,
+            )
+        )
+    except Exception:
         return 0.0
-
-    ref_counts = Counter(ref_tokens)
-    clipped = 0
-    for token in set(pred_tokens):
-        clipped += min(pred_tokens.count(token), ref_counts.get(token, 0))
-
-    return clipped / len(pred_tokens)
 
 
 def compute_rouge_l(prediction: str, reference: str) -> float:
-    """ROUGE-L F1 score based on longest common subsequence."""
+    """ROUGE-L F1 score based on longest common subsequence (stemmer=True per A-MEM)."""
     try:
         from rouge_score import rouge_scorer
-        scorer = rouge_scorer.RougeScorer(["rougeL"], use_stemmer=False)
+        scorer = rouge_scorer.RougeScorer(["rougeL"], use_stemmer=True)
         scores = scorer.score(reference, prediction)
         return scores["rougeL"].fmeasure
     except Exception:
@@ -165,10 +189,10 @@ def compute_rouge_l(prediction: str, reference: str) -> float:
 
 
 def compute_rouge2(prediction: str, reference: str) -> float:
-    """ROUGE-2 F1 score based on bigram overlap."""
+    """ROUGE-2 F1 score based on bigram overlap (stemmer=True per A-MEM)."""
     try:
         from rouge_score import rouge_scorer
-        scorer = rouge_scorer.RougeScorer(["rouge2"], use_stemmer=False)
+        scorer = rouge_scorer.RougeScorer(["rouge2"], use_stemmer=True)
         scores = scorer.score(reference, prediction)
         return scores["rouge2"].fmeasure
     except Exception:
@@ -197,7 +221,7 @@ def compute_meteor(prediction: str, reference: str) -> float:
 
 def compute_sbert(prediction: str, reference: str, model) -> float:
     """
-    SBERT cosine similarity scaled to 0-100.
+    SBERT cosine similarity in 0-1 range (aligned with A-MEM).
 
     Args:
         model: A loaded SentenceTransformer model (passed in to avoid repeated loading).
@@ -206,8 +230,7 @@ def compute_sbert(prediction: str, reference: str, model) -> float:
         from sentence_transformers import util
         emb1 = model.encode(prediction, convert_to_tensor=True)
         emb2 = model.encode(reference, convert_to_tensor=True)
-        sim = float(util.cos_sim(emb1, emb2).item())
-        return sim * 100.0
+        return float(util.cos_sim(emb1, emb2).item())
     except Exception:
         return 0.0
 

@@ -193,9 +193,11 @@ class RenormalizationEngine:
                 continue
 
             # Entailment gate: check if Sigma logically covers this note
+            # Sigma is the premise (broader synthesis), old note is the hypothesis
+            # (we ask: does sigma subsume the old note's information?)
             entailment = await self._check_entailment(
-                premise=note_data.get("content", ""),
-                hypothesis=sigma_text,
+                premise=sigma_text,
+                hypothesis=note_data.get("content", ""),
             )
             if not entailment:
                 continue

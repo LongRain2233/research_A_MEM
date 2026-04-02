@@ -130,15 +130,29 @@ class SQLiteHotTrack:
         )
         await self._db.commit()
 
-    async def apply_global_decay(self, decay_factor: float = 0.95) -> int:
+    async def apply_global_decay(
+        self, decay_factor: float = 0.95, grace_period_hours: float = 1.0
+    ) -> int:
         """
-        Apply time-based decay to all nodes not recently accessed.
+        Apply time-based decay to nodes not recently accessed and not abstract.
+
+        Abstract (Sigma/Delta) nodes are excluded because they represent
+        synthesized higher-order knowledge that should not erode over time.
+        Recently accessed nodes (within *grace_period_hours*) are also
+        excluded to avoid punishing actively useful memories.
+
         Anti-freeze mechanism from Implementation Plan §3 Module 1.
         Returns number of affected rows.
         """
+        cutoff = (
+            datetime.utcnow() - timedelta(hours=grace_period_hours)
+        ).isoformat()
         cursor = await self._db.execute(
-            "UPDATE Memory_State SET utility_score = utility_score * ?",
-            (decay_factor,),
+            """UPDATE Memory_State
+               SET utility_score = utility_score * ?
+               WHERE is_abstract = 0
+                 AND (last_accessed_at IS NULL OR last_accessed_at < ?)""",
+            (decay_factor, cutoff),
         )
         await self._db.commit()
         return cursor.rowcount

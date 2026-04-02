@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from concurrent.futures import ProcessPoolExecutor, as_completed
 import itertools
 import json
 import logging
@@ -127,6 +128,24 @@ def _composite_score(metrics: dict) -> float:
         + 0.3 * metrics.get("avg_rouge_l", 0.0)
         + 0.2 * metrics.get("avg_meteor", 0.0)
         + 0.1 * metrics.get("avg_bleu", 0.0)
+    )
+
+
+def _run_trial_in_subprocess(payload: dict[str, Any]) -> dict[str, Any]:
+    """
+    子进程入口：在独立进程中执行单次 trial，避免环境变量和资源冲突。
+    """
+    return asyncio.run(
+        run_single_trial(
+            theta_sim=payload["theta_sim"],
+            theta_sum=payload["theta_sum"],
+            theta_evict=payload["theta_evict"],
+            decay_interval_rounds=payload["decay_interval_rounds"],
+            record_indices=payload["record_indices"],
+            data_path=payload["data_path"],
+            trial_id=payload["trial_id"],
+            include_adversarial=payload["include_adversarial"],
+        )
     )
 
 
@@ -468,37 +487,17 @@ async def main_async(args: argparse.Namespace) -> None:
     if skipped > 0:
         print(f"[断点续搜] 已跳过 {skipped} 组已完成的组合，剩余 {len(pending)} 组。\n")
 
-    for trial_num, combo in enumerate(pending, skipped + 1):
-        ts, tsum, te, decay_intv = (
-            combo["theta_sim"],
-            combo["theta_sum"],
-            combo["theta_evict"],
-            combo["decay_interval_rounds"],
-        )
-        trial_id = f"{ts:.2f}_{tsum}_{te:.2f}_{decay_intv}_{int(time.time())}"
+    if not pending:
+        print("没有待运行的参数组合。")
+    else:
+        max_parallel = max(1, args.max_parallel)
+        print(f"  并行进程数   : {max_parallel}\n")
 
-        print(
-            f"[{trial_num}/{total}] theta_sim={ts} theta_sum={tsum} theta_evict={te} decay={decay_intv} "
-            f"  开始时间: {datetime.now().strftime('%H:%M:%S')}"
-        )
-
-        result = await run_single_trial(
-            theta_sim=ts,
-            theta_sum=tsum,
-            theta_evict=te,
-            decay_interval_rounds=decay_intv,
-            record_indices=record_indices,
-            data_path=args.data_path,
-            trial_id=trial_id,
-            include_adversarial=args.include_adversarial,
-        )
-
-        all_results.append(result)
-        _save_results(all_results)
-
-        if "error" in result.get("metrics", {}):
-            print(f"  [FAILED] {result['metrics']['error']}")
-        else:
+        # 输出统一的结果摘要，保持串行和并行模式一致。
+        def print_trial_summary(result: dict[str, Any]) -> None:
+            if "error" in result.get("metrics", {}):
+                print(f"  [FAILED] {result['metrics']['error']}")
+                return
             m = result["metrics"]
             print(
                 f"  综合分={result['composite_score']:.4f}  "
@@ -507,7 +506,6 @@ async def main_async(args: argparse.Namespace) -> None:
                 f"METEOR={m.get('avg_meteor', 0):.4f}  "
                 f"耗时={result['elapsed_seconds']}s"
             )
-            # 打印简化的类别细分
             by_cat = m.get("by_category", {})
             if by_cat:
                 cat_summary = []
@@ -515,6 +513,115 @@ async def main_async(args: argparse.Namespace) -> None:
                     cat_data = by_cat[cat]
                     cat_summary.append(f"C{cat}:F1={cat_data.get('avg_f1', 0):.3f}")
                 print(f"    类别细分: {' | '.join(cat_summary)}")
+
+        # 先构建任务列表，确保 trial_id 在并行时也稳定且唯一。
+        tasks: list[tuple[int, dict[str, Any], str]] = []
+        for trial_num, combo in enumerate(pending, skipped + 1):
+            ts, tsum, te, decay_intv = (
+                combo["theta_sim"],
+                combo["theta_sum"],
+                combo["theta_evict"],
+                combo["decay_interval_rounds"],
+            )
+            trial_id = f"{trial_num:04d}_{ts:.2f}_{tsum}_{te:.2f}_{decay_intv}_{time.time_ns()}"
+            tasks.append((trial_num, combo, trial_id))
+
+        if max_parallel == 1:
+            # 保留串行路径，便于调试与资源受限场景。
+            for trial_num, combo, trial_id in tasks:
+                ts, tsum, te, decay_intv = (
+                    combo["theta_sim"],
+                    combo["theta_sum"],
+                    combo["theta_evict"],
+                    combo["decay_interval_rounds"],
+                )
+                print(
+                    f"[{trial_num}/{total}] theta_sim={ts} theta_sum={tsum} theta_evict={te} decay={decay_intv} "
+                    f"  开始时间: {datetime.now().strftime('%H:%M:%S')}"
+                )
+                result = await run_single_trial(
+                    theta_sim=ts,
+                    theta_sum=tsum,
+                    theta_evict=te,
+                    decay_interval_rounds=decay_intv,
+                    record_indices=record_indices,
+                    data_path=args.data_path,
+                    trial_id=trial_id,
+                    include_adversarial=args.include_adversarial,
+                )
+                all_results.append(result)
+                _save_results(all_results)
+                print_trial_summary(result)
+        else:
+            # 并行路径：子进程并发执行，主进程按任务顺序落盘和打印，结果秩序稳定。
+            ordered_results: dict[int, tuple[int, dict[str, Any], dict[str, Any]]] = {}
+            next_to_flush = 0
+
+            with ProcessPoolExecutor(max_workers=max_parallel) as executor:
+                future_to_idx = {}
+                for idx, (trial_num, combo, trial_id) in enumerate(tasks):
+                    ts, tsum, te, decay_intv = (
+                        combo["theta_sim"],
+                        combo["theta_sum"],
+                        combo["theta_evict"],
+                        combo["decay_interval_rounds"],
+                    )
+                    print(
+                        f"[{trial_num}/{total}] theta_sim={ts} theta_sum={tsum} theta_evict={te} decay={decay_intv} "
+                        f"  已提交  时间: {datetime.now().strftime('%H:%M:%S')}"
+                    )
+                    payload = {
+                        "theta_sim": ts,
+                        "theta_sum": tsum,
+                        "theta_evict": te,
+                        "decay_interval_rounds": decay_intv,
+                        "record_indices": record_indices,
+                        "data_path": args.data_path,
+                        "trial_id": trial_id,
+                        "include_adversarial": args.include_adversarial,
+                    }
+                    fut = executor.submit(_run_trial_in_subprocess, payload)
+                    future_to_idx[fut] = idx
+
+                for fut in as_completed(future_to_idx):
+                    idx = future_to_idx[fut]
+                    trial_num, combo, _ = tasks[idx]
+                    try:
+                        result = fut.result()
+                    except Exception as e:
+                        # 子进程级异常兜底，保证整个搜索不中断。
+                        result = {
+                            "trial_id": "unknown",
+                            "params": {
+                                "theta_sim": combo["theta_sim"],
+                                "theta_sum": combo["theta_sum"],
+                                "theta_evict": combo["theta_evict"],
+                                "decay_interval_rounds": combo["decay_interval_rounds"],
+                            },
+                            "record_indices": record_indices,
+                            "metrics": {"error": f"subprocess failure: {e}"},
+                            "composite_score": 0.0,
+                            "elapsed_seconds": 0.0,
+                            "timestamp": datetime.now().isoformat(),
+                        }
+                    ordered_results[idx] = (trial_num, combo, result)
+
+                    while next_to_flush in ordered_results:
+                        flush_trial_num, flush_combo, flush_result = ordered_results.pop(next_to_flush)
+                        ts, tsum, te, decay_intv = (
+                            flush_combo["theta_sim"],
+                            flush_combo["theta_sum"],
+                            flush_combo["theta_evict"],
+                            flush_combo["decay_interval_rounds"],
+                        )
+                        print(
+                            f"[{flush_trial_num}/{total}] theta_sim={ts} theta_sum={tsum} theta_evict={te} decay={decay_intv} "
+                            f"  已完成  时间: {datetime.now().strftime('%H:%M:%S')}"
+                        )
+                        all_results.append(flush_result)
+                        _save_results(all_results)
+                        print_trial_summary(flush_result)
+                        next_to_flush += 1
 
     print("\n所有实验完成！")
     print_leaderboard(all_results)
@@ -625,6 +732,15 @@ def main() -> None:
         help=(
             "自定义结果文件保存路径（默认: data/hparam_search_results.json）。"
             "例如: --output experiments/run_1/results.json"
+        ),
+    )
+    parser.add_argument(
+        "--max-parallel",
+        type=int,
+        default=1,
+        help=(
+            "并行执行的最大进程数（默认: 1=串行）。"
+            "建议从 2 开始尝试，避免机器过载。"
         ),
     )
 
