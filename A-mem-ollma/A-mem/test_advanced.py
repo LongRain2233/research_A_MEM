@@ -17,7 +17,7 @@ from collections import defaultdict
 import pickle
 import random
 from tqdm import tqdm
-from utils import calculate_metrics, aggregate_metrics
+from utils import calculate_metrics, aggregate_metrics, simple_tokenize
 from datetime import datetime
 
 # Download required NLTK data
@@ -406,14 +406,54 @@ def evaluate_dataset(dataset_path: str, model: str, output_path: Optional[str] =
                 logger.info(f"\nQuestion {total_questions}: {qa.question}")
                 logger.info(f"Prediction: {prediction}")
                 logger.info(f"Reference: {qa.final_answer}")
-                logger.info(f"User Prompt: {user_prompt}")
                 logger.info(f"Category: {qa.category}")
-                logger.info(f"Raw Context: {raw_context}")
-                
+
+                # ── Cat 4 专项诊断：为什么 Open Domain F1 低？──
+                if qa.category == 4:
+                    _pred_str = str(prediction).strip()
+                    _ref_str = str(qa.final_answer).strip() if qa.final_answer else ""
+                    _ref_tokens = set(simple_tokenize(_ref_str))
+                    _pred_tokens = set(simple_tokenize(_pred_str))
+                    _common = _pred_tokens & _ref_tokens
+                    _prec = len(_common) / len(_pred_tokens) if _pred_tokens else 0.0
+                    _rec = len(_common) / len(_ref_tokens) if _ref_tokens else 0.0
+                    _f1_diag = 2 * _prec * _rec / (_prec + _rec) if (_prec + _rec) > 0 else 0.0
+                    _ctx_str = str(raw_context)
+                    _ctx_len = len(_ctx_str)
+                    _ctx_memory_count = _ctx_str.count("memory content:")
+                    # 参考答案关键词是否在上下文中出现
+                    _ctx_lower = _ctx_str.lower()
+                    _ref_in_ctx = {t for t in _ref_tokens if t in _ctx_lower}
+                    _ref_not_in_ctx = _ref_tokens - _ref_in_ctx
+                    _hit = len(_ref_in_ctx)
+                    _total = len(_ref_tokens)
+                    _hit_pct = f"{_hit}/{_total}" if _total else "0/0"
+                    # 判断失败原因
+                    if _f1_diag == 0 and _total > 0:
+                        if _hit == _total:
+                            _reason = "GEN_FAIL"   # 答案在上下文中，但LLM没提取出来
+                        elif _hit == 0:
+                            _reason = "RETRIEVAL_FAIL"  # 答案完全不在上下文中
+                        else:
+                            _reason = "PARTIAL_RETRIEVAL"  # 部分关键词缺失
+                    else:
+                        _reason = ""
+                    logger.info(
+                        f"[CAT4-DIAG] F1={_f1_diag:.4f} ctx_memories={_ctx_memory_count} "
+                        f"ctx_chars={_ctx_len} ref_in_ctx={_hit_pct} "
+                        f"{_reason+' ' if _reason else ''}"
+                        f"Q={qa.question[:60]}... "
+                        f"PRED={_pred_str[:80]}... "
+                        f"REF={_ref_str[:80]}..."
+                    )
+                    if _reason and _ref_not_in_ctx:
+                        logger.info(f"  missing_ref_tokens={_ref_not_in_ctx}")
+                # ── End Cat 4 diagnostic ──
+
                 # Calculate metrics
                 metrics = calculate_metrics(prediction, qa.final_answer) if qa.final_answer else {
-                    "exact_match": 0, "f1": 0.0, "rouge1_f": 0.0, "rouge2_f": 0.0, 
-                    "rougeL_f": 0.0, "bleu1": 0.0, "bleu2": 0.0, "bleu3": 0.0, 
+                    "exact_match": 0, "f1": 0.0, "rouge1_f": 0.0, "rouge2_f": 0.0,
+                    "rougeL_f": 0.0, "bleu1": 0.0, "bleu2": 0.0, "bleu3": 0.0,
                     "bleu4": 0.0, "bert_f1": 0.0, "meteor": 0.0, "sbert_similarity": 0.0
                 }
                 

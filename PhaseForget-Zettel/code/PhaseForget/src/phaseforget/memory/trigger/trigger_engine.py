@@ -131,4 +131,8 @@ class TriggerEngine:
                 anchor_v=anchor_v,
             )
 
+        logger.debug(
+            f"Note {note.id}: pool_size={pool_size}/{self._settings.theta_sum} "
+            f"for anchor={anchor_v} (not triggered)"
+        )
         return TriggerResult(triggered=False, anchor_v=anchor_v)

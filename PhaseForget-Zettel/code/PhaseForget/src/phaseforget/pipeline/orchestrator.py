@@ -312,14 +312,23 @@ class PhaseForgetSystem:
                 seen_ids.add(hid)
                 ordered_results.append(hit)
 
+        # A-MEM alignment: limit neighbor expansion to at most k neighbors
+        # per seed hit, matching the `if j >= k: break` guard in
+        # AgenticMemorySystem.find_related_memories_raw().  Without this cap
+        # the context sent to the LLM can be 3-5x larger than A-MEM's,
+        # inflating Open-Domain metrics through sheer token overlap.
         neighbor_ids_to_fetch: list[str] = []
         for hit in seed_hits:
             try:
                 neighbors = await self._hot.get_first_degree_neighbors(hit["id"])
+                added_for_hit = 0
                 for nid in neighbors:
                     if nid not in seen_ids:
                         seen_ids.add(nid)
                         neighbor_ids_to_fetch.append(nid)
+                        added_for_hit += 1
+                        if added_for_hit >= k:
+                            break
             except Exception as e:
                 logger.debug(f"Graph expansion failed for {hit['id']}: {e}")
 
@@ -353,6 +362,13 @@ class PhaseForgetSystem:
 
         max_abs = max(1, int(len(ordered_results) * max_abstract_ratio))
         capped_results = concrete + abstract[:max_abs]
+
+        # Final size cap: A-MEM returns at most k seed hits + up to k
+        # neighbors per hit, but in practice the total is bounded by the
+        # memory size. Cap to 2*k to stay comparable in context volume.
+        max_total = 2 * k
+        if len(capped_results) > max_total:
+            capped_results = capped_results[:max_total]
 
         return capped_results
 

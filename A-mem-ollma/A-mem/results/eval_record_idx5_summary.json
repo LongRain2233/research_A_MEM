@@ -1,0 +1,64 @@
+{
+  "model": "qwen2.5:7b",
+  "dataset": "locomo_record_idx5.json",
+  "total_questions": 158,
+  "category_distribution": {
+    "1_MultiHop": 30,
+    "2_Temporal": 24,
+    "3_SingleHop": 7,
+    "4_OpenDomain": 62,
+    "5_Adversarial": 35
+  },
+  "overall_metrics": {
+    "exact_match": 0.057,
+    "f1": 0.163,
+    "rouge1_f": 0.171,
+    "rougeL_f": 0.164,
+    "bert_f1": 0.883,
+    "sbert_similarity": 0.346
+  },
+  "category_metrics": {
+    "category_1_MultiHop": {
+      "exact_match": 0.033,
+      "f1": 0.179,
+      "bert_f1": 0.884,
+      "sbert_similarity": 0.431,
+      "count": 30
+    },
+    "category_2_Temporal": {
+      "exact_match": 0.083,
+      "f1": 0.235,
+      "bert_f1": 0.894,
+      "sbert_similarity": 0.505,
+      "count": 24
+    },
+    "category_3_SingleHop": {
+      "exact_match": 0.143,
+      "f1": 0.357,
+      "bert_f1": 0.897,
+      "sbert_similarity": 0.494,
+      "count": 7
+    },
+    "category_4_OpenDomain": {
+      "exact_match": 0.048,
+      "f1": 0.137,
+      "bert_f1": 0.878,
+      "sbert_similarity": 0.274,
+      "count": 62
+    },
+    "category_5_Adversarial": {
+      "exact_match": 0.029,
+      "f1": 0.097,
+      "bert_f1": 0.869,
+      "sbert_similarity": 0.178,
+      "count": 35
+    }
+  },
+  "key_findings": {
+    "best_performing_category": "category_3_SingleHop",
+    "worst_performing_category": "category_5_Adversarial",
+    "highest_bert_f1": "category_3_SingleHop (0.897)",
+    "lowest_bert_f1": "category_5_Adversarial (0.869)",
+    "conclusion": "模型在短程记忆(SingleHop)表现最好,在对抗性记忆检索(Adversarial)表现最差,需要增强记忆检索准确性"
+  }
+}

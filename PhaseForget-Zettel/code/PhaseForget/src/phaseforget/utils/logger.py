@@ -24,21 +24,28 @@ def setup_logging(
     root_logger = logging.getLogger("phaseforget")
     root_logger.setLevel(getattr(logging, level.upper(), logging.INFO))
 
-    # Guard: do not add duplicate handlers on repeated calls (e.g. tests)
-    if root_logger.handlers:
-        return root_logger
-
     formatter = logging.Formatter(
         "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 
-    # Console handler
-    console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setFormatter(formatter)
-    root_logger.addHandler(console_handler)
+    # 移除旧的 FileHandler（多 trial 情况下切换到新日志文件）
+    for h in list(root_logger.handlers):
+        if isinstance(h, logging.FileHandler):
+            h.close()
+            root_logger.removeHandler(h)
 
-    # File handler (optional)
+    # 只在没有控制台 handler 时添加（避免重复输出）
+    has_console = any(
+        type(h) is logging.StreamHandler
+        for h in root_logger.handlers
+    )
+    if not has_console:
+        console_handler = logging.StreamHandler(sys.stdout)
+        console_handler.setFormatter(formatter)
+        root_logger.addHandler(console_handler)
+
+    # File handler（每次 trial 都添加新的文件 handler）
     if log_file:
         log_path = Path(log_file)
         log_path.parent.mkdir(parents=True, exist_ok=True)

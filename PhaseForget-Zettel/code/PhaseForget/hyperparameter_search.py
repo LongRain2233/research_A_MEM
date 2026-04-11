@@ -145,6 +145,7 @@ def _run_trial_in_subprocess(payload: dict[str, Any]) -> dict[str, Any]:
             data_path=payload["data_path"],
             trial_id=payload["trial_id"],
             include_adversarial=payload["include_adversarial"],
+            disable_self_retrieval=payload.get("disable_self_retrieval", False),
         )
     )
 
@@ -158,6 +159,7 @@ async def run_single_trial(
     data_path: str,
     trial_id: str,
     include_adversarial: bool = False,
+    disable_self_retrieval: bool = False,
     extra_env: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """
@@ -183,7 +185,7 @@ async def run_single_trial(
         "DECAY_INTERVAL_ROUNDS": str(decay_interval_rounds),
         "CHROMA_PERSIST_DIR": f"./data/{experiment_id}/chroma_db",
         "SQLITE_DB_PATH": f"./data/{experiment_id}/phaseforget.db",
-        "LOG_LEVEL": "WARNING",
+        "LOG_LEVEL": "INFO",
         "LOG_FILE": f"./data/{experiment_id}/phaseforget.log",
     }
     if extra_env:
@@ -198,6 +200,7 @@ async def run_single_trial(
     result_metrics = {}
 
     try:
+        log_file_path = f"./data/{experiment_id}/phaseforget.log"
         settings = Settings(
             experiment_id=experiment_id,
             theta_sim=theta_sim,
@@ -206,9 +209,12 @@ async def run_single_trial(
             decay_interval_rounds=decay_interval_rounds,
             chroma_persist_dir=f"./data/{experiment_id}/chroma_db",
             sqlite_db_path=f"./data/{experiment_id}/phaseforget.db",
-            log_level="WARNING",
-            log_file=f"./data/{experiment_id}/phaseforget.log",
+            log_level="INFO",
+            log_file=log_file_path,
         )
+
+        # 初始化日志文件（之前缺少这一步导致日志只打印到控制台）
+        setup_logging(level="INFO", log_file=log_file_path)
 
         system = PhaseForgetSystem(settings=settings)
         await system.initialize()
@@ -222,6 +228,7 @@ async def run_single_trial(
             system,
             llm_client=system._llm,
             checkpoint_path=ckpt_path,
+            disable_self_retrieval=disable_self_retrieval,
         )
 
         bench_results = await runner.run(
@@ -255,6 +262,20 @@ async def run_single_trial(
                         "n_questions": len(cat_m.f1_scores),
                     }
 
+        # ── Diagnostic: dump memory stats to verify forget mechanism ────
+        try:
+            stats = await system.get_stats()
+            logger.info(
+                f"[TRIAL-STATS] trial={trial_id} "
+                f"total_notes={stats.get('total_notes', '?')} "
+                f"abstract_notes={stats.get('abstract_notes', '?')} "
+                f"total_links={stats.get('total_links', '?')} "
+                f"interactions={stats.get('interaction_count', '?')}"
+            )
+            result_metrics["memory_stats"] = stats
+        except Exception as e2:
+            logger.debug(f"Stats collection failed: {e2}")
+
         await system.close()
 
     except Exception as e:
@@ -269,12 +290,19 @@ async def run_single_trial(
             else:
                 os.environ[k] = old_v
 
-        # 清理临时实验数据
-        if base_data.exists():
+        # 保留日志文件用于诊断，但清理 chroma_db 和 phaseforget.db
+        chroma_dir = base_data / "chroma_db"
+        db_file = base_data / "phaseforget.db"
+        if chroma_dir.exists():
             try:
-                shutil.rmtree(base_data)
+                shutil.rmtree(chroma_dir)
             except Exception as e:
-                logger.warning(f"Failed to clean up {base_data}: {e}")
+                logger.warning(f"Failed to clean up {chroma_dir}: {e}")
+        if db_file.exists():
+            try:
+                db_file.unlink()
+            except Exception as e:
+                logger.warning(f"Failed to clean up {db_file}: {e}")
 
     elapsed = time.time() - start_time
     return {
@@ -285,6 +313,7 @@ async def run_single_trial(
             "theta_evict": theta_evict,
             "decay_interval_rounds": decay_interval_rounds,
         },
+        "disable_self_retrieval": disable_self_retrieval,
         "record_indices": record_indices,
         "metrics": result_metrics,
         "composite_score": _composite_score(result_metrics),
@@ -457,6 +486,7 @@ async def main_async(args: argparse.Namespace) -> None:
     print(f"  decay_intv   : {decay_interval_values}")
     print(f"  数据集记录   : {record_indices if record_indices else '全部(0-9)'}")
     print(f"  包含对抗题   : {args.include_adversarial}")
+    print(f"  关闭自检索   : {args.disable_self_retrieval}")
     print(f"  数据集路径   : {args.data_path}")
     print(f"  结果保存至   : {RESULTS_PATH}")
     print(f"{'='*60}\n")
@@ -548,6 +578,7 @@ async def main_async(args: argparse.Namespace) -> None:
                     data_path=args.data_path,
                     trial_id=trial_id,
                     include_adversarial=args.include_adversarial,
+                    disable_self_retrieval=args.disable_self_retrieval,
                 )
                 all_results.append(result)
                 _save_results(all_results)
@@ -579,6 +610,7 @@ async def main_async(args: argparse.Namespace) -> None:
                         "data_path": args.data_path,
                         "trial_id": trial_id,
                         "include_adversarial": args.include_adversarial,
+                        "disable_self_retrieval": args.disable_self_retrieval,
                     }
                     fut = executor.submit(_run_trial_in_subprocess, payload)
                     future_to_idx[fut] = idx
@@ -630,7 +662,7 @@ async def main_async(args: argparse.Namespace) -> None:
 
 def main() -> None:
     logging.basicConfig(
-        level=logging.WARNING,
+        level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
 
@@ -662,6 +694,15 @@ def main() -> None:
         help=(
             "是否在 LoCoMo 评估中包含 category=5 的对抗问题。"
             "默认不包含（遵循常见协议）。"
+        ),
+    )
+    parser.add_argument(
+        "--disable-self-retrieval",
+        action="store_true",
+        help=(
+            "关闭对话写入阶段的自检索（self-retrieval）。"
+            "用于诊断：对齐 A-MEM 的线性写入行为，"
+            "检验自检索对 Open Domain F1 偏高的影响。"
         ),
     )
 

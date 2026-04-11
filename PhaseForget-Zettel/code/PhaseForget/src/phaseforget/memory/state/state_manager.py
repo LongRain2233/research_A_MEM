@@ -168,7 +168,8 @@ class StateManager:
         Returns number of affected notes.
         """
         affected = await self._hot.apply_global_decay(
-            decay_factor=self._settings.decay_factor
+            decay_factor=self._settings.decay_factor,
+            grace_period_hours=0.0,
         )
         logger.info(f"Global decay applied to {affected} notes")
         return affected

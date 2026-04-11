@@ -180,6 +180,12 @@ class RenormalizationEngine:
             logger.info(f"Renorm[{anchor_v}]: Delta node created → {delta_note.id}")
 
         # ── Step 5: Utility-aware eviction ───────────────────────────────
+        eviction_stats = {
+            "total_candidates": len(scored_notes),
+            "utility_too_high": 0,
+            "entailment_false": 0,
+            "evicted": 0,
+        }
         for note_data in scored_notes:
             nid = note_data["id"]
 
@@ -190,6 +196,7 @@ class RenormalizationEngine:
             # Check eviction condition: utility < theta_evict
             utility = await self._hot.get_utility(nid) or 0.0
             if utility >= self._settings.theta_evict:
+                eviction_stats["utility_too_high"] += 1
                 continue
 
             # Entailment gate: check if Sigma logically covers this note
@@ -200,6 +207,11 @@ class RenormalizationEngine:
                 hypothesis=note_data.get("content", ""),
             )
             if not entailment:
+                eviction_stats["entailment_false"] += 1
+                logger.info(
+                    f"Renorm[{anchor_v}]: entailment=False for {nid} "
+                    f"(utility={utility:.3f}, content={note_data.get('content', '')[:60]}...)"
+                )
                 continue
 
             # Execute eviction: topology inheritance + physical delete
@@ -208,12 +220,13 @@ class RenormalizationEngine:
             await self._hot.delete_state(nid)
 
             result.evicted_ids.append(nid)
+            eviction_stats["evicted"] += 1
             logger.info(f"Renorm[{anchor_v}]: evicted {nid} (utility={utility:.3f})")
 
         logger.info(
             f"Renorm[{anchor_v}] complete: "
             f"sigma={result.sigma_id}, delta={result.delta_id}, "
-            f"evicted={len(result.evicted_ids)}"
+            f"eviction_stats={eviction_stats}"
         )
         return result
 

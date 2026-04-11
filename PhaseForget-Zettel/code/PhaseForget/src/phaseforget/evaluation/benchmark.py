@@ -31,6 +31,7 @@ from typing import Any, Optional
 from phaseforget.evaluation.metrics import (
     EvalMetrics,
     RetrievalTimer,
+    _simple_tokenize,
     compute_bleu1,
     compute_f1,
     compute_rouge_l,
@@ -146,6 +147,7 @@ class BenchmarkRunner:
         system,
         llm_client=None,
         checkpoint_path: Optional[str] = None,
+        disable_self_retrieval: bool = False,
     ):
         """
         Args:
@@ -154,6 +156,10 @@ class BenchmarkRunner:
                              retrieved memories are used as context for LLM to generate
                              answers (matches A-MEM evaluation protocol).
             checkpoint_path: Optional path for saving/resuming benchmark progress.
+            disable_self_retrieval: If True, skip search_with_graph during dialogue
+                             ingestion (Phase 1). This isolates the effect of
+                             self-retrieval on QA metrics, matching A-MEM's
+                             linear memory building without retrieval feedback.
         """
         self._system = system
         self._llm_client = llm_client
@@ -163,6 +169,8 @@ class BenchmarkRunner:
             checkpoint_path or "./data/bench_checkpoint.json"
         )
         self._sbert_model = None  # lazy-loaded once on first use
+        self._disable_self_retrieval = disable_self_retrieval
+        self._cat4_diag_count = 0  # counter for deep Open Domain diagnostics
 
     def register_baseline(self, baseline: BaselineAdapter) -> None:
         """Register a baseline system for comparison."""
@@ -296,9 +304,14 @@ class BenchmarkRunner:
                 if metrics is not None:
                     metrics.answer_parse_fail += 1
 
-        fallback = " ".join(r.get("content", "")[:200] for r in retrieved[:3])
-        logger.debug(f"Using retrieval fallback answer (len={len(fallback)}): {fallback[:80]}")
-        return fallback
+        # A-MEM alignment: when LLM answer generation fails, A-MEM uses the
+        # raw LLM response string directly (not retrieved text concatenation).
+        # Concatenating retrieved content inflates F1 because long retrieval
+        # text has high token overlap with long reference answers, especially
+        # for Open-Domain questions.  Return empty string to mirror A-MEM's
+        # behaviour when JSON parsing fails but there is no raw text to use.
+        logger.debug("LLM answer generation failed, returning empty prediction")
+        return ""
 
     @staticmethod
     def _tokenize_text(text: str) -> set[str]:
@@ -460,6 +473,7 @@ class BenchmarkRunner:
             f"Starting benchmark: dataset={dataset_name}, "
             f"baselines={[b.name() for b in self._baselines]}, "
             f"llm_generation={'enabled' if use_llm else 'disabled (retrieval fallback)'}, "
+            f"self_retrieval={'DISABLED' if self._disable_self_retrieval else 'enabled'}, "
             f"checkpoint={self._checkpoint_path}"
         )
 
@@ -518,9 +532,10 @@ class BenchmarkRunner:
                 # Self-Retrieval: 在写入新记忆前，先用当前对话内容检索历史记忆，
                 # 模拟"新信息唤起相关记忆"的自然过程，使效用分数在构建阶段就能更新。
                 # 第一轮（turn_idx=0）库为空，跳过检索直接写入。
+                # 可通过 disable_self_retrieval=True 关闭，用于对齐 A-MEM 行为。
                 retrieved_ids: list[str] = []
                 adopted_ids: list[str] = []
-                if turn_idx > 0:
+                if turn_idx > 0 and not self._disable_self_retrieval:
                     try:
                         recalled = await self._system.search_with_graph(
                             content, top_k=3
@@ -584,6 +599,45 @@ class BenchmarkRunner:
                         reference=reference,
                         metrics=pf_metrics,
                     )
+
+                    # ── Cat 4 专项诊断：对比 A-MEM 用 ──────────────────
+                    if category == 4:
+                        f1_val = compute_f1(prediction, reference)
+                        ref_tokens = set(_simple_tokenize(reference))
+                        ctx_chars = sum(
+                            len(r.get("metadata", {}).get("content", r.get("content", "")))
+                            for r in pf_results
+                        )
+                        _all_ctx_text = " ".join(
+                            r.get("metadata", {}).get("content", r.get("content", ""))
+                            for r in pf_results
+                        ).lower()
+                        ref_in_ctx = {t for t in ref_tokens if t in _all_ctx_text}
+                        ref_not_in_ctx = ref_tokens - ref_in_ctx
+                        _hit = len(ref_in_ctx)
+                        _total = len(ref_tokens)
+                        _hit_pct = f"{_hit}/{_total}" if _total else "0/0"
+                        if f1_val == 0 and _total > 0:
+                            if _hit == _total:
+                                _reason = "GEN_FAIL"
+                            elif _hit == 0:
+                                _reason = "RETRIEVAL_FAIL"
+                            else:
+                                _reason = "PARTIAL_RETRIEVAL"
+                        else:
+                            _reason = ""
+                        logger.info(
+                            f"[CAT4-DIAG] F1={f1_val:.4f} retrieved={len(pf_results)} "
+                            f"ctx_chars={ctx_chars} ref_in_ctx={_hit_pct} "
+                            f"{_reason+' ' if _reason else ''}"
+                            f"Q={question[:60]}... "
+                            f"PRED={prediction[:80]}... "
+                            f"REF={reference[:80]}..."
+                        )
+                        if _reason and ref_not_in_ctx:
+                            logger.info(f"  missing_ref_tokens={ref_not_in_ctx}")
+                    # ── End Cat 4 diagnostic ──────────────────────────────
+
                     retrieved_ids = [r.get("id") for r in pf_results if r.get("id")]
                     adopted_ids = self._infer_adopted_ids(pf_results, prediction)
                     await self._system.update_retrieval_feedback(
@@ -688,6 +742,19 @@ class BenchmarkRunner:
                 f"{m.avg_retrieval_time_us:>12.1f} {n:>6} "
                 f"{m.parse_fail_rate:>11.1%} {m.query_expand_parse_fail:>9d}"
             )
+
+        # ── Open Domain Investigation Summary ──────────────────────────
+        for name, m in results.items():
+            if m.by_category:
+                lines.extend(["", f"  {name} — Per-Category Token Analysis:", "-" * 110])
+                for cat in sorted(m.by_category):
+                    cat_m = m.by_category[cat]
+                    n = len(cat_m.f1_scores)
+                    if n > 0:
+                        avg_f1 = sum(cat_m.f1_scores) / n
+                        lines.append(
+                            f"  Cat {cat}: N={n:>3}  avg_F1={avg_f1:.4f}"
+                        )
 
         has_category_breakdown = any(m.by_category for m in results.values())
         if has_category_breakdown:

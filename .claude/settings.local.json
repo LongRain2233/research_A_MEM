@@ -4,7 +4,16 @@
       "Bash(ls:*)",
       "Bash(\"D:\\\\research\\\\research_A_MEM\\\\PhaseForget-Zettel\\\\code\\\\PhaseForget\\\\docs\\\\修改说明\\\\修改1.md\":*)",
       "Bash(\"D:\\\\research\\\\research_A_MEM\\\\PhaseForget-Zettel\\\\code\\\\PhaseForget\\\\docs\\\\修改说明\\\\修改总览.md\":*)",
-      "Bash(wc:*)"
+      "Bash(wc:*)",
+      "Bash(grep -E \"\\\\.py$\")",
+      "WebSearch",
+      "Bash(find /d/research/research_A_MEM/A-mem-ollma/A-mem/results -type f -name *.json)",
+      "Bash(certutil -hashfile \"D:\\\\research\\\\research_A_MEM\\\\A-mem-ollma\\\\A-mem\\\\data\\\\locomo10.json\" MD5)",
+      "Bash(certutil -hashfile \"D:\\\\research\\\\research_A_MEM\\\\PhaseForget-Zettel\\\\code\\\\PhaseForget\\\\dataset\\\\locomo10.json\" MD5)",
+      "Bash(python -c \":*)",
+      "Bash(ollama list:*)",
+      "Bash(python -c \"import sys; sys.path.insert\\(0,''src''\\); from phaseforget.evaluation.benchmark import BenchmarkRunner; print\\(''OK''\\)\")",
+      "Bash(python -c \"from test_advanced import *; print\\(''OK''\\)\")"
     ]
   }
 }
