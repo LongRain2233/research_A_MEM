@@ -48,9 +48,6 @@ class RenormalizationEngine:
     This is the core "phase transition" engine of PhaseForget-Zettel.
     """
 
-    # Maximum recursive renormalization depth (§4.2: limit to 1 layer)
-    MAX_RENORM_DEPTH = 1
-
     def __init__(
         self,
         cold_track: ChromaColdTrack,
@@ -64,7 +61,12 @@ class RenormalizationEngine:
         self._llm = llm_client
         self._state = state_manager
         self._settings = settings
-        self._current_depth = 0
+        # Per-anchor in-progress set replaces the old global depth counter.
+        # Allows concurrent renorms on different anchors (genuine parallelism)
+        # while still preventing duplicate work on the same anchor.
+        # True cascade is impossible: Sigma/Delta notes are created via
+        # state_manager.create_note() which bypasses TriggerEngine entirely.
+        self._in_progress: set[str] = set()
 
     async def execute(self, anchor_v: str) -> RenormResult:
         """
@@ -75,7 +77,7 @@ class RenormalizationEngine:
             2. Projection operator P: prioritize abstract nodes + high utility.
             3. Synthesis operator S: generate Sigma and Delta via LLM.
             4. Closed-loop injection: write back as new notes.
-            5. Utility-aware eviction with entailment gating.
+            5. Utility-aware eviction with redundancy gating.
 
         Args:
             anchor_v: The anchor node ID that triggered renormalization.
@@ -83,21 +85,26 @@ class RenormalizationEngine:
         Returns:
             RenormResult with IDs of new nodes and evicted nodes.
         """
-        result = RenormResult()
-
-        # §4.2 Recursive depth limit: reject if already at max depth
-        if self._current_depth >= self.MAX_RENORM_DEPTH:
-            logger.warning(
-                f"Renorm[{anchor_v}]: blocked by recursive depth limit "
-                f"(depth={self._current_depth}, max={self.MAX_RENORM_DEPTH})"
+        # Skip if this specific anchor is already being processed.
+        # Different anchors are allowed to run concurrently.
+        if anchor_v in self._in_progress:
+            logger.info(
+                f"Renorm[{anchor_v}]: already in progress for this anchor, "
+                "skipping duplicate trigger"
             )
-            return result
+            return RenormResult()
 
-        self._current_depth += 1
+        if self._in_progress:
+            logger.info(
+                f"Renorm[{anchor_v}]: starting concurrently alongside "
+                f"{len(self._in_progress)} other anchor(s)"
+            )
+
+        self._in_progress.add(anchor_v)
         try:
-            return await self._execute_inner(anchor_v, result)
+            return await self._execute_inner(anchor_v, RenormResult())
         finally:
-            self._current_depth -= 1
+            self._in_progress.discard(anchor_v)
 
     async def _execute_inner(
         self, anchor_v: str, result: RenormResult
@@ -189,9 +196,14 @@ class RenormalizationEngine:
         for note_data in scored_notes:
             nid = note_data["id"]
 
-            # Apply penalty to edge nodes not in projected core
+            # Apply penalty to edge nodes not in projected core.
+            # Uses eviction_penalty_factor (default 0.6) so that a note starting
+            # at u_init=0.5 drops to 0.30 after one renorm cycle, which falls
+            # below the typical theta_evict=0.35 and enables eviction.
             if nid not in projected_ids:
-                await self._hot.apply_utility_penalty(nid, penalty_factor=0.9)
+                await self._hot.apply_utility_penalty(
+                    nid, penalty_factor=self._settings.eviction_penalty_factor
+                )
 
             # Check eviction condition: utility < theta_evict
             utility = await self._hot.get_utility(nid) or 0.0
@@ -232,15 +244,16 @@ class RenormalizationEngine:
 
     async def _check_entailment(self, premise: str, hypothesis: str) -> bool:
         """
-        LLM-based entailment check: is the premise logically subsumed by hypothesis?
-        Conservative - defaults to False on failure.
+        LLM-based redundancy check (replaces previous strict entailment):
+        Does the premise (new Sigma summary) fully cover the core facts of
+        the hypothesis (old note)?
         """
         try:
             response = await self._llm.generate_json(
                 ENTAILMENT_PROMPT.format(premise=premise, hypothesis=hypothesis),
-                system_prompt="You are a logical entailment judge. Output ONLY a valid JSON object with keys: entailed, confidence, reasoning. No explanations, no markdown.",
+                system_prompt="You must respond with ONLY a valid JSON object.",
             )
-            return response.get("entailed", False) is True
+            return response.get("redundant", False) is True
         except Exception as e:
             logger.warning(f"Entailment check failed, defaulting to False: {e}")
             return False

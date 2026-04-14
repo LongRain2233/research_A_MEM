@@ -42,6 +42,15 @@ class Settings(BaseSettings):
         default=3600,
         description="Cooldown period in seconds after renormalization"
     )
+    eviction_penalty_factor: float = Field(
+        default=0.6,
+        description=(
+            "Multiplicative penalty applied to edge nodes (not in projected core) "
+            "during renormalization. Lower value → faster utility drop → more eviction. "
+            "Original value was 0.9 (too weak); 0.6 brings a 0.5-init note to 0.30, "
+            "below the typical theta_evict=0.35 after a single renorm cycle."
+        )
+    )
 
     # ── Retrieval Parameters ─────────────────────────────────────────────
 

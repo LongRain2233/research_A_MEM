@@ -58,32 +58,42 @@ Rules:
 """
 
 
-# ── Module 3: Entailment Judgment (M_renorm eviction gate) ──────────────
-# Determines whether a base note is logically subsumed by the Sigma node.
+# ── Module 3: Redundancy Judgment (M_renorm eviction gate) ──────────────
+# Determines whether an old note is fully subsumed by the new Sigma node.
 
-ENTAILMENT_PROMPT = """You are a logical entailment judge for a memory system.
-Determine whether the Premise is logically entailed (subsumed) by the Hypothesis.
+ENTAILMENT_PROMPT = """You are a memory compaction assistant. Your job is to check if an old memory note is redundant because its core facts are already fully covered by a new synthesized summary.
 
-### Premise (old memory note)
----
-{premise}
----
-
-### Hypothesis (synthesized higher-order knowledge - Sigma)
+### Old Memory Note
 ---
 {hypothesis}
 ---
 
-### Output Format (pure JSON, no markdown)
-{{
-    "entailed": true/false,
-    "confidence": 0.0-1.0,
-    "reasoning": "Brief explanation of why the premise is or is not covered by the hypothesis."
-}}
+### New Synthesized Summary
+---
+{premise}
+---
 
-Rules:
-1. "entailed: true" means the Premise's core information is fully covered by the Hypothesis.
-2. If the Premise contains unique details NOT present in the Hypothesis, output "entailed: false".
-3. Be conservative - when in doubt, output "entailed: false" to prevent information loss.
-4. Output ONLY the JSON object.
+### Task
+Does the "New Synthesized Summary" contain ALL the important facts, entities, dates, and actions mentioned in the "Old Memory Note"?
+
+### Rules
+1. If the old note contains important specific details (like a specific time, place, or person's name) that are MISSING in the summary, output "redundant: false".
+2. If the old note only has minor conversational filler, or all its concrete facts are already explicitly stated in the summary, output "redundant: true".
+3. You must ONLY output a valid JSON object.
+
+### Examples
+Example 1:
+Old Note: "I suggest we take the 8 AM high-speed train to Beijing next Wednesday."
+Summary: "We discussed taking the 8 AM high-speed train to Beijing next Wednesday."
+Output: {{"redundant": true}}
+
+Example 2:
+Old Note: "I suggest we take the 8 AM high-speed train to Beijing next Wednesday."
+Summary: "We discussed the business trip to Beijing."
+Output: {{"redundant": false}}
+
+### Output Format (JSON boolean, NOT a string)
+{{
+    "redundant": true
+}}
 """
