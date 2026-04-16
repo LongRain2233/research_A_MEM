@@ -13,7 +13,8 @@
       "Bash(python -c \":*)",
       "Bash(ollama list:*)",
       "Bash(python -c \"import sys; sys.path.insert\\(0,''src''\\); from phaseforget.evaluation.benchmark import BenchmarkRunner; print\\(''OK''\\)\")",
-      "Bash(python -c \"from test_advanced import *; print\\(''OK''\\)\")"
+      "Bash(python -c \"from test_advanced import *; print\\(''OK''\\)\")",
+      "Bash(python:*)"
     ]
   }
 }
