@@ -198,6 +198,7 @@ async def run_single_trial(
 
     start_time = time.time()
     result_metrics = {}
+    _trial_succeeded = False
 
     try:
         log_file_path = f"./data/{experiment_id}/phaseforget.log"
@@ -277,6 +278,7 @@ async def run_single_trial(
             logger.debug(f"Stats collection failed: {e2}")
 
         await system.close()
+        _trial_succeeded = True
 
     except Exception as e:
         logger.error(f"Trial {trial_id} failed: {e}", exc_info=True)
@@ -290,19 +292,24 @@ async def run_single_trial(
             else:
                 os.environ[k] = old_v
 
-        # 保留日志文件用于诊断，但清理 chroma_db 和 phaseforget.db
+        # 只有 trial 成功完成时才清理 DB；中断或失败时保留，以支持断点续传
         chroma_dir = base_data / "chroma_db"
         db_file = base_data / "phaseforget.db"
-        if chroma_dir.exists():
-            try:
-                shutil.rmtree(chroma_dir)
-            except Exception as e:
-                logger.warning(f"Failed to clean up {chroma_dir}: {e}")
-        if db_file.exists():
-            try:
-                db_file.unlink()
-            except Exception as e:
-                logger.warning(f"Failed to clean up {db_file}: {e}")
+        if _trial_succeeded:
+            if chroma_dir.exists():
+                try:
+                    shutil.rmtree(chroma_dir)
+                except Exception as e:
+                    logger.warning(f"Failed to clean up {chroma_dir}: {e}")
+            if db_file.exists():
+                try:
+                    db_file.unlink()
+                except Exception as e:
+                    logger.warning(f"Failed to clean up {db_file}: {e}")
+        else:
+            logger.info(
+                f"Trial {trial_id} 未完成，DB 已保留以支持断点续传: {base_data}"
+            )
 
     elapsed = time.time() - start_time
     return {
@@ -546,6 +553,8 @@ async def main_async(args: argparse.Namespace) -> None:
 
         # 先构建任务列表，确保 trial_id 在并行时也稳定且唯一。
         tasks: list[tuple[int, dict[str, Any], str]] = []
+        # trial_id 必须确定性，不含时间戳，以便重启后复用同一 DB 和 bench_checkpoint
+        ri_str = "all" if record_indices is None else "_".join(map(str, sorted(record_indices)))
         for trial_num, combo in enumerate(pending, skipped + 1):
             ts, tsum, te, decay_intv = (
                 combo["theta_sim"],
@@ -553,7 +562,7 @@ async def main_async(args: argparse.Namespace) -> None:
                 combo["theta_evict"],
                 combo["decay_interval_rounds"],
             )
-            trial_id = f"{trial_num:04d}_{ts:.2f}_{tsum}_{te:.2f}_{decay_intv}_{time.time_ns()}"
+            trial_id = f"{ts:.2f}_{tsum}_{te:.2f}_{decay_intv}_{ri_str}"
             tasks.append((trial_num, combo, trial_id))
 
         if max_parallel == 1:
