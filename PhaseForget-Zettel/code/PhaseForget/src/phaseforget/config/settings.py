@@ -73,8 +73,13 @@ class Settings(BaseSettings):
         description="Apply global decay every N interaction rounds"
     )
     decay_factor: float = Field(
-        default=0.95,
-        description="Multiplicative decay applied to unretrieved nodes"
+        default=0.85,
+        description=(
+            "Multiplicative decay applied to unretrieved nodes per decay_interval_rounds. "
+            "0.7 was too aggressive (u=0.5 drops to 0.35 in one cycle, causing over-eviction). "
+            "0.85 requires ~3 cycles (~150 rounds) to cross theta_evict, giving notes a "
+            "fairer chance before being evicted."
+        )
     )
 
     # ── LLM Configuration ────────────────────────────────────────────────

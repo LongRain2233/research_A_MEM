@@ -82,7 +82,12 @@ async def run_stats(experiment_id: str = None):
 
 async def run_benchmark(args):
     """Run evaluation benchmark."""
-    from phaseforget.evaluation.loaders import LoCoMoLoader, PersonaMemLoader, DialSimLoader
+    from phaseforget.evaluation.loaders import (
+        DialSimLoader,
+        LoCoMoLoader,
+        LongMemEvalLoader,
+        PersonaMemLoader,
+    )
     from phaseforget.evaluation.baselines import MemoryBankAdapter
     from phaseforget.evaluation.benchmark import BenchmarkRunner
 
@@ -106,6 +111,7 @@ async def run_benchmark(args):
                 record_indices=record_indices,
                 include_adversarial=getattr(args, "include_adversarial", False),
             ),
+            "longmemeval": LongMemEvalLoader(record_indices=record_indices),
             "personamem": PersonaMemLoader(),
             "dialsim": DialSimLoader(),
         }
@@ -161,7 +167,7 @@ def main():
 
     bench_parser = subparsers.add_parser("bench", help="Run benchmark")
     bench_parser.add_argument(
-        "--dataset", choices=["locomo", "personamem", "dialsim"],
+        "--dataset", choices=["locomo", "longmemeval", "personamem", "dialsim"],
         default="locomo", help="Dataset to evaluate on"
     )
     bench_parser.add_argument(
@@ -174,8 +180,8 @@ def main():
     bench_parser.add_argument(
         "--record-indices", type=str, default=None,
         help=(
-            "Comma-separated 0-based record indices from locomo10.json to use "
-            "(e.g. '0,2,4' selects the 1st, 3rd, 5th records). "
+            "Comma-separated 0-based record indices for datasets that support "
+            "sample-level selection (for example locomo/longmemeval). "
             "Default: use all records."
         )
     )

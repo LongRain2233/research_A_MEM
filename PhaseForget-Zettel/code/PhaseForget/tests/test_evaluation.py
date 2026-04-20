@@ -9,6 +9,7 @@ import tempfile
 import pytest
 
 from phaseforget.evaluation.loaders.locomo import LoCoMoLoader
+from phaseforget.evaluation.loaders.longmemeval import LongMemEvalLoader
 from phaseforget.evaluation.loaders.personamem import PersonaMemLoader
 from phaseforget.evaluation.loaders.dialsim import DialSimLoader
 from phaseforget.evaluation.baselines.memorybank_adapter import MemoryBankAdapter
@@ -206,6 +207,64 @@ class TestPersonaMemLoader:
         assert len(sessions) == 1
         # Sessions should be flattened into sequential dialogue
         assert len(sessions[0]["dialogue"]) == 2
+
+
+class TestLongMemEvalLoader:
+
+    def _make_record(self, question_id: str = "q_1"):
+        return {
+            "question_id": question_id,
+            "question_type": "temporal-reasoning",
+            "question": "When did we confirm the launch window?",
+            "question_date": "2023/05/30 (Tue) 23:31",
+            "answer": "On 2023/05/29 in the evening.",
+            "answer_session_ids": ["answer_session_1"],
+            "haystack_session_ids": ["s1", "s2"],
+            "haystack_dates": ["2023/05/28 (Sun) 09:00", "2023/05/29 (Mon) 19:00"],
+            "haystack_sessions": [
+                [
+                    {"role": "user", "content": "Can you check the draft plan?"},
+                    {"role": "assistant", "content": "Sure, I'll review it."},
+                ],
+                [
+                    {"role": "user", "content": "We confirmed the launch window yesterday evening."},
+                    {"role": "assistant", "content": "Noted, I'll keep that in mind."},
+                ],
+            ],
+        }
+
+    def test_load_longmemeval_format(self):
+        data = [self._make_record()]
+        fd, path = tempfile.mkstemp(suffix=".json")
+        os.close(fd)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+
+        loader = LongMemEvalLoader()
+        sessions = loader.load(path)
+        os.unlink(path)
+
+        assert len(sessions) == 1
+        assert sessions[0]["session_id"] == "q_1"
+        assert len(sessions[0]["dialogue"]) == 4
+        assert len(sessions[0]["questions"]) == 1
+        assert sessions[0]["questions"][0]["category"] == 2
+        assert sessions[0]["dialogue"][0]["created_at"] == "2023/05/28 (Sun) 09:00"
+        assert sessions[0]["dialogue"][2]["session_id"] == "s2"
+
+    def test_record_indices_filter(self):
+        data = [self._make_record("q_1"), self._make_record("q_2")]
+        fd, path = tempfile.mkstemp(suffix=".json")
+        os.close(fd)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+
+        loader = LongMemEvalLoader(record_indices=[1])
+        sessions = loader.load(path)
+        os.unlink(path)
+
+        assert len(sessions) == 1
+        assert sessions[0]["session_id"] == "q_2"
 
 
 class TestDialSimLoader:
