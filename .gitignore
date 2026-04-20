@@ -24,3 +24,5 @@
 # 其他
 .DS_Store
 Thumbs.db
+
+*/dataset/longmemeval_*.json
