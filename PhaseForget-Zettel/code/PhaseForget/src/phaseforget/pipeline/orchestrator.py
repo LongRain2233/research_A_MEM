@@ -152,14 +152,15 @@ class PhaseForgetSystem:
             The newly created MemoryNote.
         """
         # Persist count to SQLite so it survives restarts
-        self._interaction_count = await self._hot.increment_interaction_count()
+        async with self._hot.transaction():
+            self._interaction_count = await self._hot.increment_interaction_count()
 
-        # Step 1: Update utilities for previously retrieved notes
-        if retrieved_ids:
-            await self._state_mgr.update_utility_on_retrieval(
-                note_ids=retrieved_ids,
-                adopted_ids=adopted_ids or [],
-            )
+            # Step 1: Update utilities for previously retrieved notes
+            if retrieved_ids:
+                await self._state_mgr.update_utility_on_retrieval(
+                    note_ids=retrieved_ids,
+                    adopted_ids=adopted_ids or [],
+                )
 
         # Step 2: Create new note (async metadata extraction)
         note = await self._state_mgr.create_note(content=content)
@@ -349,12 +350,11 @@ class PhaseForgetSystem:
         # to avoid diluting factual evidence with synthesized summaries.
         concrete: list[dict] = []
         abstract: list[dict] = []
+        note_states = await self._hot.get_note_states([r["id"] for r in ordered_results])
         for r in ordered_results:
             rid = r["id"]
-            try:
-                is_abs = await self._hot.is_abstract(rid)
-            except Exception:
-                is_abs = False
+            state = note_states.get(rid, {})
+            is_abs = state.get("is_abstract", False)
             if is_abs:
                 abstract.append(r)
             else:

@@ -131,11 +131,13 @@ class RenormalizationEngine:
 
         # ── Step 2: Projection Operator P ────────────────────────────────
         # Prioritize abstract nodes, then by utility score (descending)
+        note_states = await self._hot.get_note_states([note["id"] for note in raw_notes])
         scored_notes = []
         for note_data in raw_notes:
             nid = note_data["id"]
-            is_abs = await self._hot.is_abstract(nid)
-            utility = await self._hot.get_utility(nid) or 0.0
+            state = note_states.get(nid, {})
+            is_abs = state.get("is_abstract", False)
+            utility = state.get("utility", 0.0) or 0.0
             scored_notes.append({
                 **note_data,
                 "is_abstract": is_abs,
@@ -197,7 +199,7 @@ class RenormalizationEngine:
             nid = note_data["id"]
 
             # Check eviction condition: utility < theta_evict
-            utility = await self._hot.get_utility(nid) or 0.0
+            utility = note_data.get("utility", 0.0)
             if utility >= self._settings.theta_evict:
                 eviction_stats["utility_too_high"] += 1
                 continue
@@ -218,9 +220,14 @@ class RenormalizationEngine:
                 continue
 
             # Execute eviction: topology inheritance + physical delete
-            await self._hot.inherit_links(source_id=nid, new_target_id=sigma_note.id)
-            self._cold.delete(nid)
-            await self._hot.delete_state(nid)
+            async with self._hot.transaction():
+                await self._hot.inherit_links(
+                    source_id=nid,
+                    new_target_id=sigma_note.id,
+                    commit=False,
+                )
+                self._cold.delete(nid)
+                await self._hot.delete_state(nid, commit=False)
 
             result.evicted_ids.append(nid)
             eviction_stats["evicted"] += 1

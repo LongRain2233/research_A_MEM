@@ -155,9 +155,13 @@ class StateManager:
             adopted_ids: Subset of note_ids that were actually used/adopted.
         """
         eta = self._settings.eta
-        for nid in note_ids:
-            reward = 1.0 if nid in adopted_ids else 0.0
-            await self._hot.update_utility(nid, reward=reward, eta=eta)
+        adopted_set = set(adopted_ids)
+        note_rewards = {
+            nid: (1.0 if nid in adopted_set else 0.0)
+            for nid in note_ids
+        }
+        await self._hot.update_utilities_batch(note_rewards=note_rewards, eta=eta)
+        for nid, reward in note_rewards.items():
             logger.debug(f"Utility updated: {nid}, reward={reward}")
 
     async def apply_global_decay(self) -> int:
