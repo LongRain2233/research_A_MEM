@@ -25,4 +25,4 @@
 .DS_Store
 Thumbs.db
 
-*/dataset/longmemeval_*.json
+**/dataset/longmemeval_*.json

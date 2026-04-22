@@ -93,14 +93,13 @@ class TriggerEngine:
 
         # Step 3: Establish Zettel explicit links (L_n)
         neighbor_ids = [n["id"] for n in valid_neighbors]
-        await self._hot.insert_links(source_id=note.id, target_ids=neighbor_ids)
-        logger.debug(f"Note {note.id}: linked to {len(neighbor_ids)} neighbors")
+        cooldown_states = await self._hot.get_cooldown_states(neighbor_ids)
 
         # Step 4: Determine anchor node v (highest similarity, not in cooldown)
         anchor_v = None
         for neighbor in valid_neighbors:
             nid = neighbor["id"]
-            if not await self._hot.is_in_cooldown(nid):
+            if not cooldown_states.get(nid, False):
                 anchor_v = nid
                 break
 
@@ -108,24 +107,38 @@ class TriggerEngine:
             logger.debug(f"Note {note.id}: all candidate anchors in cooldown")
             return TriggerResult(triggered=False)
 
-        # Step 5: Accumulate evidence pool for anchor_v
-        await self._hot.append_evidence_pool(anchor_v=anchor_v, evidence_id=note.id)
+        # Step 3/5/6 share one short transaction to avoid repeated commits
+        async with self._hot.transaction():
+            await self._hot.insert_links(
+                source_id=note.id,
+                target_ids=neighbor_ids,
+                commit=False,
+            )
+            logger.debug(f"Note {note.id}: linked to {len(neighbor_ids)} neighbors")
 
-        # Step 5b: Multi-scale propagation - also propagate to parent nodes
-        parent_ids = await self._hot.get_parent_nodes(anchor_v)
-        for pid in parent_ids:
-            await self._hot.append_evidence_pool(anchor_v=pid, evidence_id=note.id)
+            # Step 5: Accumulate evidence pool for anchor_v and parent nodes
+            parent_ids = await self._hot.get_parent_nodes(anchor_v)
+            pool_sizes = await self._hot.append_evidence_to_anchors(
+                anchor_ids=[anchor_v, *parent_ids],
+                evidence_id=note.id,
+                commit=False,
+            )
 
-        # Step 6: Check trigger threshold |I_v^new| > theta_sum
-        pool_size = await self._hot.get_pool_size(anchor_v)
+            # Step 6: Check trigger threshold |I_v^new| > theta_sum
+            pool_size = pool_sizes.get(anchor_v, 0)
+            if pool_size > self._settings.theta_sum:
+                # Set cooldown to prevent cascading (§4.2)
+                await self._hot.set_cooldown(
+                    anchor_v,
+                    self._settings.t_cool,
+                    commit=False,
+                )
+
         if pool_size > self._settings.theta_sum:
             logger.info(
                 f"TRIGGER: anchor={anchor_v}, pool_size={pool_size} > "
                 f"theta_sum={self._settings.theta_sum}"
             )
-            # Set cooldown to prevent cascading (§4.2)
-            await self._hot.set_cooldown(anchor_v, self._settings.t_cool)
-
             return TriggerResult(
                 triggered=True,
                 anchor_v=anchor_v,
