@@ -40,20 +40,38 @@ from phaseforget.evaluation.benchmark import DatasetLoader
 logger = logging.getLogger(__name__)
 
 _QUESTION_TYPE_TO_CATEGORY = {
-    "single-session-assistant": 1,
-    "single-session-user": 1,
-    "temporal-reasoning": 2,
-    "multi-session": 3,
-    "knowledge-update": 4,
-    "single-session-preference": 5,
+    "single-session-user":       1,
+    "single-session-assistant":  2,
+    "single-session-preference": 3,
+    "multi-session":             4,
+    "knowledge-update":          5,
+    "temporal-reasoning":        6,
+    "abstention":                7,
 }
 
 
 class LongMemEvalLoader(DatasetLoader):
-    """Loader for the LongMemEval conversational memory benchmark."""
+    """
+    Loader for the LongMemEval conversational memory benchmark.
 
-    def __init__(self, record_indices: list[int] | None = None):
+    Args:
+        record_indices:     Optional list of 0-based record indices to load.
+        include_abstention: Whether to include ``abstention`` questions
+            (category 7).  Default False — these questions test whether
+            the system correctly declines to answer about information
+            that was never mentioned.  They are excluded by default
+            because the correct answer ("I don't know / not mentioned")
+            cannot be fairly evaluated with token-overlap metrics (F1,
+            ROUGE, BLEU, METEOR).
+    """
+
+    def __init__(
+        self,
+        record_indices: list[int] | None = None,
+        include_abstention: bool = False,
+    ):
         self._record_indices = record_indices
+        self._include_abstention = include_abstention
 
     def name(self) -> str:
         return "LongMemEval"
@@ -103,11 +121,21 @@ class LongMemEvalLoader(DatasetLoader):
             )
 
         sessions = []
+        skipped_abstention = 0
         for rec_idx, record in enumerate(records):
+            question_type = str(record.get("question_type", "")).strip()
+            if question_type == "abstention" and not self._include_abstention:
+                skipped_abstention += 1
+                continue
             session = self._normalize_record(record, rec_idx)
             if session is not None:
                 sessions.append(session)
 
+        if skipped_abstention:
+            logger.info(
+                "LongMemEval: skipped %s abstention records (pass include_abstention=True to include)",
+                skipped_abstention,
+            )
         logger.info("LongMemEval: loaded %s sessions from %s", len(sessions), path)
         return sessions
 

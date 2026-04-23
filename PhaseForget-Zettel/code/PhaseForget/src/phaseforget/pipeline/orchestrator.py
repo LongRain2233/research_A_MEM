@@ -380,3 +380,12 @@ class PhaseForgetSystem:
             **hot_stats,
             "cold_track_count": cold_count,
         }
+
+    def get_memory_token_count(self) -> int:
+        """
+        Count total whitespace-split tokens stored in the cold track (ChromaDB).
+
+        Provides the token footprint of the fully-built memory system.
+        Useful for reporting memory efficiency relative to ingested input tokens.
+        """
+        return self._cold.get_total_content_tokens()

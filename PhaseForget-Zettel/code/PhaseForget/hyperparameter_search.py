@@ -141,11 +141,13 @@ DATASET_CATEGORY_LABELS = {
         "5": "Adversarial (对抗性)",
     },
     "longmemeval": {
-        "1": "Single-session recall",
-        "2": "Temporal reasoning",
-        "3": "Multi-session reasoning",
-        "4": "Knowledge update",
-        "5": "Preference recall",
+        "1": "Single-session user",
+        "2": "Single-session assistant",
+        "3": "Single-session preference",
+        "4": "Multi-session",
+        "5": "Knowledge update",
+        "6": "Temporal reasoning",
+        "7": "Abstention",
     },
 }
 
@@ -154,6 +156,7 @@ def _build_dataset_loader(
     dataset: str,
     record_indices: list[int] | None,
     include_adversarial: bool,
+    include_abstention: bool = False,
 ):
     from phaseforget.evaluation.loaders import (
         DialSimLoader,
@@ -168,7 +171,10 @@ def _build_dataset_loader(
             include_adversarial=include_adversarial,
         )
     if dataset == "longmemeval":
-        return LongMemEvalLoader(record_indices=record_indices)
+        return LongMemEvalLoader(
+            record_indices=record_indices,
+            include_abstention=include_abstention,
+        )
     if dataset == "personamem":
         return PersonaMemLoader()
     if dataset == "dialsim":
@@ -231,6 +237,7 @@ def _run_trial_in_subprocess(payload: dict[str, Any]) -> dict[str, Any]:
             data_path=payload["data_path"],
             trial_id=payload["trial_id"],
             include_adversarial=payload["include_adversarial"],
+            include_abstention=payload.get("include_abstention", False),
             disable_self_retrieval=payload.get("disable_self_retrieval", False),
         )
     )
@@ -249,6 +256,7 @@ async def run_single_trial(
     data_path: str = DEFAULT_DATA_PATHS["locomo"],
     trial_id: str = "",
     include_adversarial: bool = False,
+    include_abstention: bool = False,
     disable_self_retrieval: bool = False,
     extra_env: dict[str, str] | None = None,
 ) -> dict[str, Any]:
@@ -317,6 +325,7 @@ async def run_single_trial(
             dataset=dataset,
             record_indices=record_indices,
             include_adversarial=include_adversarial,
+            include_abstention=include_abstention,
         )
         ckpt_path = str(base_data / "bench_checkpoint.json")
         runner = BenchmarkRunner(
@@ -341,7 +350,14 @@ async def run_single_trial(
                 "avg_meteor": pf.avg_meteor,
                 "avg_sbert": pf.avg_sbert,
                 "avg_retrieval_time_us": pf.avg_retrieval_time_us,
+                "avg_retrieval_latency_s": round(pf.avg_retrieval_time_s, 6),
+                "avg_context_tokens": round(pf.avg_context_tokens, 1),
+                "total_ingest_tokens": pf.total_ingest_tokens,
                 "n_questions": len(pf.f1_scores),
+                "answer_parse_fail": pf.answer_parse_fail,
+                "query_expand_parse_fail": pf.query_expand_parse_fail,
+                "parse_fail_rate": round(pf.parse_fail_rate, 4),
+                "peak_memory_mb": round(max(pf.memory_usage_mb), 1) if pf.memory_usage_mb else 0.0,
             }
             if pf.by_category:
                 result_metrics["by_category"] = {}
@@ -356,16 +372,89 @@ async def run_single_trial(
                         "n_questions": len(cat_m.f1_scores),
                     }
 
+        # ── 聚合 timing JSON：Build Time / Ingest 吞吐率 / QA 吞吐率 ──────
+        timing_file = base_data / "bench_checkpoint_timing.json"
+        timing_records: list[dict] = []
+        if timing_file.exists():
+            try:
+                with open(timing_file, "r", encoding="utf-8") as _tf:
+                    timing_records = json.load(_tf)
+            except Exception as _e:
+                logger.debug(f"Failed to read timing file: {_e}")
+
+        _build_time_s = sum(r.get("phase1_ingest_s", 0.0) for r in timing_records)
+        _qa_time_s    = sum(r.get("phase2_qa_s", 0.0)    for r in timing_records)
+        _total_turns  = sum(r.get("n_turns", 0)           for r in timing_records)
+        _total_qs     = sum(r.get("n_questions", 0)       for r in timing_records)
+        _build_time_h = _build_time_s / 3600.0
+        _ingest_tpm   = (_total_turns / _build_time_s * 60) if _build_time_s > 0 else 0.0
+        _qa_tput_qps  = (_total_qs / _qa_time_s) if _qa_time_s > 0 else 0.0
+
+        result_metrics.update({
+            "build_time_s":         round(_build_time_s, 1),
+            "build_time_h":         round(_build_time_h, 6),
+            "qa_time_s":            round(_qa_time_s, 1),
+            "total_turns_ingested": _total_turns,
+            "ingest_throughput_tpm": round(_ingest_tpm, 2),
+            "qa_throughput_qps":    round(_qa_tput_qps, 3),
+        })
+
+        # ── 记忆系统 Token 占用（ChromaDB 所有 note 内容词数）────────────
+        _memory_token_count = 0
+        try:
+            _memory_token_count = system.get_memory_token_count()
+            result_metrics["memory_token_count"] = _memory_token_count
+            _ingest_tokens = result_metrics.get("total_ingest_tokens", 0)
+            result_metrics["memory_compression_ratio"] = round(
+                _ingest_tokens / _memory_token_count, 3
+            ) if _memory_token_count > 0 else None
+        except Exception as _e:
+            logger.debug(f"Memory token count failed: {_e}")
+
+        # ── 系统统计（笔记数 / 链接数 / 抽象比）────────────────────────
         try:
             stats = await system.get_stats()
-            logger.info(
-                f"[TRIAL-STATS] trial={trial_id} "
-                f"total_notes={stats.get('total_notes', '?')} "
-                f"abstract_notes={stats.get('abstract_notes', '?')} "
-                f"total_links={stats.get('total_links', '?')} "
-                f"interactions={stats.get('interaction_count', '?')}"
-            )
+            _total_notes    = stats.get("total_notes", 0)
+            _abstract_notes = stats.get("abstract_notes", 0)
+            _total_links    = stats.get("total_links", 0)
+            _interactions   = stats.get("interaction_count", 0)
             result_metrics["memory_stats"] = stats
+            result_metrics["notes_per_turn"] = round(
+                _total_notes / _total_turns, 3
+            ) if _total_turns > 0 else None
+            result_metrics["abstract_ratio"] = round(
+                _abstract_notes / _total_notes, 3
+            ) if _total_notes > 0 else None
+
+            # ── 综合效率日志块 ─────────────────────────────────────────
+            logger.info(
+                f"\n{'='*70}\n"
+                f"  [TRIAL-METRICS] {trial_id}\n"
+                f"{'='*70}\n"
+                f"  质量指标:\n"
+                f"    综合分        = {_composite_score(result_metrics):.4f}\n"
+                f"    Avg F1        = {result_metrics.get('avg_f1', 0):.4f}\n"
+                f"    Avg ROUGE-L   = {result_metrics.get('avg_rouge_l', 0):.4f}\n"
+                f"    Avg METEOR    = {result_metrics.get('avg_meteor', 0):.4f}\n"
+                f"    Avg SBERT     = {result_metrics.get('avg_sbert', 0):.4f}\n"
+                f"    ParseFailRate = {result_metrics.get('parse_fail_rate', 0):.2%}\n"
+                f"  效率指标:\n"
+                f"    Build Time    = {_build_time_h:.4f} h  ({_build_time_s:.1f} s)\n"
+                f"    Ingest Rate   = {_ingest_tpm:.1f} turns/min\n"
+                f"    QA Latency    = {result_metrics.get('avg_retrieval_latency_s', 0):.4f} s/query\n"
+                f"    QA Throughput = {_qa_tput_qps:.3f} q/s\n"
+                f"    Tokens/Query  = {result_metrics.get('avg_context_tokens', 0):.0f} tokens\n"
+                f"  记忆系统:\n"
+                f"    Total Notes   = {_total_notes}  (abstract={_abstract_notes})\n"
+                f"    Total Links   = {_total_links}\n"
+                f"    Notes/Turn    = {result_metrics.get('notes_per_turn', 0):.3f}\n"
+                f"    Abstract Ratio= {result_metrics.get('abstract_ratio', 0):.1%}\n"
+                f"    Ingest Tokens = {result_metrics.get('total_ingest_tokens', 0):,}\n"
+                f"    Memory Tokens = {_memory_token_count:,}\n"
+                f"    Compression   = {result_metrics.get('memory_compression_ratio', 'N/A')}x\n"
+                f"    Peak Mem      = {result_metrics.get('peak_memory_mb', 0):.1f} MB\n"
+                f"{'='*70}"
+            )
         except Exception as e2:
             logger.debug(f"Stats collection failed: {e2}")
 
@@ -485,6 +574,7 @@ async def _run_bayesian_search(
     record_indices: list[int] | None,
     data_path: str,
     include_adversarial: bool,
+    include_abstention: bool,
     disable_self_retrieval: bool,
     all_results: list[dict],
     seed: int = 42,
@@ -611,6 +701,7 @@ async def _run_bayesian_search(
             data_path=data_path,
             trial_id=trial_id,
             include_adversarial=include_adversarial,
+            include_abstention=include_abstention,
             disable_self_retrieval=disable_self_retrieval,
         )
 
@@ -629,6 +720,14 @@ async def _run_bayesian_search(
                 f"ROUGE-L={m.get('avg_rouge_l', 0):.4f}  "
                 f"METEOR={m.get('avg_meteor', 0):.4f}  "
                 f"耗时={result['elapsed_seconds']}s"
+            )
+            print(
+                f"    BuildTime={m.get('build_time_h', 0):.4f}h  "
+                f"Latency={m.get('avg_retrieval_latency_s', 0):.4f}s  "
+                f"Tokens/Q={m.get('avg_context_tokens', 0):.0f}  "
+                f"MemTokens={m.get('memory_token_count', 0):,}  "
+                f"IngestRate={m.get('ingest_throughput_tpm', 0):.1f}t/min  "
+                f"PeakMem={m.get('peak_memory_mb', 0):.0f}MB"
             )
             by_cat = m.get("by_category", {})
             if by_cat:
@@ -681,17 +780,20 @@ def print_leaderboard(
 
     sorted_results = sorted(valid, key=lambda x: x["composite_score"], reverse=True)
 
-    print("\n" + "=" * 140)
+    _LB_WIDTH = 185
+    print("\n" + "=" * _LB_WIDTH)
     dataset_label = f" [{dataset}]" if dataset else ""
     print(f"  超参数搜索排行榜{dataset_label} (Top {min(top_n, len(sorted_results))})")
-    print("=" * 140)
+    print("=" * _LB_WIDTH)
     print(
         f"{'排名':<4} {'θ_sim':>6} {'θ_sum':>6} {'θ_evict':>8} {'η':>6} "
         f"{'decay':>6} {'intv':>5} {'topK':>5} "
         f"{'综合分':>8} {'F1':>8} {'ROUGE-L':>8} {'METEOR':>8} {'BLEU':>8} "
-        f"{'样本数':>6} {'耗时(s)':>8}"
+        f"{'样本数':>6} {'耗时(s)':>8} "
+        f"{'BuildTime(h)':>13} {'Latency(s)':>11} {'Tokens/Q':>9} "
+        f"{'MemTokens':>10} {'Ingest(t/m)':>11} {'PeakMem(MB)':>12}"
     )
-    print("-" * 140)
+    print("-" * _LB_WIDTH)
 
     for rank, r in enumerate(sorted_results[:top_n], 1):
         p = r["params"]
@@ -706,10 +808,16 @@ def print_leaderboard(
             f"{r['composite_score']:>8.4f} {m.get('avg_f1', 0):>8.4f} "
             f"{m.get('avg_rouge_l', 0):>8.4f} {m.get('avg_meteor', 0):>8.4f} "
             f"{m.get('avg_bleu', 0):>8.4f} {m.get('n_questions', 0):>6} "
-            f"{r.get('elapsed_seconds', 0):>8.1f}"
+            f"{r.get('elapsed_seconds', 0):>8.1f} "
+            f"{m.get('build_time_h', 0):>13.4f} "
+            f"{m.get('avg_retrieval_latency_s', 0):>11.4f} "
+            f"{m.get('avg_context_tokens', 0):>9.0f} "
+            f"{m.get('memory_token_count', 0):>10,} "
+            f"{m.get('ingest_throughput_tpm', 0):>11.1f} "
+            f"{m.get('peak_memory_mb', 0):>12.1f}"
         )
 
-    print("=" * 140)
+    print("=" * _LB_WIDTH)
 
     if sorted_results:
         best = sorted_results[0]
@@ -723,6 +831,26 @@ def print_leaderboard(
         print(f"  decay_factor         = {bp.get('decay_factor', 0.85)}")
         print(f"  decay_interval_rounds= {bp.get('decay_interval_rounds', 50)}")
         print(f"  retrieval_top_k      = {bp.get('retrieval_top_k', 10)}")
+
+        print(f"\n最佳结果的效率指标：")
+        print(f"  Build Time           = {bm.get('build_time_h', 0):.4f} h  ({bm.get('build_time_s', 0):.1f} s)")
+        print(f"  Ingest Rate          = {bm.get('ingest_throughput_tpm', 0):.1f} turns/min")
+        print(f"  QA Latency           = {bm.get('avg_retrieval_latency_s', 0):.4f} s/query  ({bm.get('avg_retrieval_time_us', 0):.1f} μs)")
+        print(f"  QA Throughput        = {bm.get('qa_throughput_qps', 0):.3f} q/s")
+        print(f"  Tokens/Query         = {bm.get('avg_context_tokens', 0):.0f} tokens (LLM context)")
+        print(f"  Ingest Tokens        = {bm.get('total_ingest_tokens', 0):,}  (input to memory system)")
+        print(f"  Memory Tokens        = {bm.get('memory_token_count', 0):,}  (stored in ChromaDB)")
+        _comp = bm.get('memory_compression_ratio')
+        print(f"  Compression Ratio    = {_comp:.3f}x" if _comp else f"  Compression Ratio    = N/A")
+        _ms = bm.get("memory_stats", {})
+        if _ms:
+            print(f"  Total Notes          = {_ms.get('total_notes', '?')}  (abstract={_ms.get('abstract_notes', '?')})")
+            print(f"  Total Links          = {_ms.get('total_links', '?')}")
+            print(f"  Notes/Turn           = {bm.get('notes_per_turn', 'N/A')}")
+            print(f"  Abstract Ratio       = {bm.get('abstract_ratio', 0):.1%}" if bm.get('abstract_ratio') is not None else f"  Abstract Ratio       = N/A")
+        print(f"  Peak Memory          = {bm.get('peak_memory_mb', 0):.1f} MB")
+        print(f"  Parse Fail Rate      = {bm.get('parse_fail_rate', 0):.2%}")
+
         print(f"\n对应的 .env 配置：")
         print(f"  THETA_SIM={bp['theta_sim']}")
         print(f"  THETA_SUM={bp['theta_sum']}")
@@ -818,6 +946,7 @@ async def main_async(args: argparse.Namespace) -> None:
         print(f"  随机种子     : {args.seed}")
         print(f"  数据集记录   : {record_indices if record_indices else '全部'}")
         print(f"  包含对抗题   : {args.include_adversarial}")
+        print(f"  包含拒答题   : {args.include_abstention}")
         print(f"  关闭自检索   : {args.disable_self_retrieval}")
         print(f"  数据集路径   : {args.data_path}")
         print(f"  结果保存至   : {RESULTS_PATH}")
@@ -857,6 +986,7 @@ async def main_async(args: argparse.Namespace) -> None:
             record_indices=record_indices,
             data_path=args.data_path,
             include_adversarial=args.include_adversarial,
+            include_abstention=args.include_abstention,
             disable_self_retrieval=args.disable_self_retrieval,
             all_results=all_results,
             seed=args.seed,
@@ -900,6 +1030,7 @@ async def main_async(args: argparse.Namespace) -> None:
     print(f"  top_k        : {retrieval_top_k_values}")
     print(f"  数据集记录   : {record_indices if record_indices else '全部'}")
     print(f"  包含对抗题   : {args.include_adversarial}")
+    print(f"  包含拒答题   : {args.include_abstention}")
     print(f"  关闭自检索   : {args.disable_self_retrieval}")
     print(f"  数据集路径   : {args.data_path}")
     print(f"  结果保存至   : {RESULTS_PATH}")
@@ -953,6 +1084,14 @@ async def main_async(args: argparse.Namespace) -> None:
                 f"METEOR={m.get('avg_meteor', 0):.4f}  "
                 f"耗时={result['elapsed_seconds']}s"
             )
+            print(
+                f"    BuildTime={m.get('build_time_h', 0):.4f}h  "
+                f"Latency={m.get('avg_retrieval_latency_s', 0):.4f}s  "
+                f"Tokens/Q={m.get('avg_context_tokens', 0):.0f}  "
+                f"MemTokens={m.get('memory_token_count', 0):,}  "
+                f"IngestRate={m.get('ingest_throughput_tpm', 0):.1f}t/min  "
+                f"PeakMem={m.get('peak_memory_mb', 0):.0f}MB"
+            )
             by_cat = m.get("by_category", {})
             if by_cat:
                 cat_summary = []
@@ -999,6 +1138,7 @@ async def main_async(args: argparse.Namespace) -> None:
                     data_path=args.data_path,
                     trial_id=trial_id,
                     include_adversarial=args.include_adversarial,
+                    include_abstention=args.include_abstention,
                     disable_self_retrieval=args.disable_self_retrieval,
                 )
                 all_results.append(result)
@@ -1031,6 +1171,7 @@ async def main_async(args: argparse.Namespace) -> None:
                         "data_path": args.data_path,
                         "trial_id": trial_id,
                         "include_adversarial": args.include_adversarial,
+                        "include_abstention": args.include_abstention,
                         "disable_self_retrieval": args.disable_self_retrieval,
                     }
                     fut = executor.submit(_run_trial_in_subprocess, payload)
@@ -1119,7 +1260,12 @@ def main() -> None:
     parser.add_argument(
         "--include-adversarial",
         action="store_true",
-        help="包含 category=5 的对抗问题（默认不包含）。",
+        help="包含 LoCoMo category=5 的对抗问题（默认不包含）。",
+    )
+    parser.add_argument(
+        "--include-abstention",
+        action="store_true",
+        help="包含 LongMemEval abstention 拒答题（默认不包含）。",
     )
     parser.add_argument(
         "--disable-self-retrieval",

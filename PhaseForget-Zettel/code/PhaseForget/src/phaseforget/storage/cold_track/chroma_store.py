@@ -179,6 +179,20 @@ class ChromaColdTrack:
         """Return total number of stored notes."""
         return self._collection.count()
 
+    def get_total_content_tokens(self) -> int:
+        """
+        Count total whitespace-split tokens across all stored note documents.
+
+        Used for reporting memory system token footprint after build.
+        Returns 0 on any failure (e.g. empty collection).
+        """
+        try:
+            results = self._collection.get(include=["documents"])
+            docs = results.get("documents") or []
+            return sum(len(d.split()) for d in docs if d)
+        except Exception:
+            return 0
+
     def reset(self) -> None:
         """
         Reset by dropping and recreating the collection.

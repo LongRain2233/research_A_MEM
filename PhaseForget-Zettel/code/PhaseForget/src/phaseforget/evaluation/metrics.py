@@ -27,6 +27,9 @@ class EvalMetrics:
     # LLM parse failure counters — help diagnose model output quality issues
     query_expand_parse_fail: int = 0
     answer_parse_fail: int = 0
+    # Token tracking — for efficiency analysis
+    context_token_counts: list[int] = field(default_factory=list)   # tokens in LLM context per QA query
+    ingest_token_counts: list[int] = field(default_factory=list)    # tokens per ingested dialogue turn
 
     @property
     def avg_f1(self) -> float:
@@ -60,6 +63,25 @@ class EvalMetrics:
             else 0.0
         )
 
+    @property
+    def avg_retrieval_time_s(self) -> float:
+        """Average retrieval latency in seconds."""
+        return self.avg_retrieval_time_us / 1_000_000
+
+    @property
+    def avg_context_tokens(self) -> float:
+        """Average whitespace-token count of the LLM context (retrieved memories) per QA query."""
+        return (
+            sum(self.context_token_counts) / len(self.context_token_counts)
+            if self.context_token_counts
+            else 0.0
+        )
+
+    @property
+    def total_ingest_tokens(self) -> int:
+        """Total whitespace-tokens fed into the memory system during ingestion."""
+        return sum(self.ingest_token_counts)
+
     def category_metrics(self, category: int) -> "EvalMetrics":
         """Get or create metric bucket for a QA category."""
         if category not in self.by_category:
@@ -85,6 +107,8 @@ class EvalMetrics:
             "memory_usage_mb": self.memory_usage_mb,
             "query_expand_parse_fail": self.query_expand_parse_fail,
             "answer_parse_fail": self.answer_parse_fail,
+            "context_token_counts": self.context_token_counts,
+            "ingest_token_counts": self.ingest_token_counts,
         }
         if include_categories and self.by_category:
             data["by_category"] = {
@@ -107,6 +131,8 @@ class EvalMetrics:
         m.memory_usage_mb = raw.get("memory_usage_mb", [])
         m.query_expand_parse_fail = raw.get("query_expand_parse_fail", 0)
         m.answer_parse_fail = raw.get("answer_parse_fail", 0)
+        m.context_token_counts = raw.get("context_token_counts", [])
+        m.ingest_token_counts = raw.get("ingest_token_counts", [])
 
         for cat_raw, cat_data in raw.get("by_category", {}).items():
             try:

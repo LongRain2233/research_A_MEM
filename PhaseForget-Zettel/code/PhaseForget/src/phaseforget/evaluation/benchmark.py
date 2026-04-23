@@ -20,7 +20,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import random
 import re
 import sys
 import time
@@ -63,13 +62,6 @@ Please generate the shortest possible answer, using words from the conversation 
 Question: {question} Short answer:
 
 Respond with a JSON object: {{"answer": "<your short answer>"}}"""
-
-_ANSWER_PROMPT_ADVERSARIAL = """\
-Based on the context: {context}, answer the following question. {question}
-
-Select the correct answer: {option_a} or {option_b}  Short answer:
-
-Respond with a JSON object: {{"answer": "<selected answer>"}}"""
 
 
 class DatasetLoader(ABC):
@@ -168,6 +160,9 @@ class BenchmarkRunner:
         self._checkpoint_path = Path(
             checkpoint_path or "./data/bench_checkpoint.json"
         )
+        self._timing_path = self._checkpoint_path.with_name(
+            self._checkpoint_path.stem + "_timing.json"
+        )
         self._sbert_model = None  # lazy-loaded once on first use
         self._disable_self_retrieval = disable_self_retrieval
         self._cat4_diag_count = 0  # counter for deep Open Domain diagnostics
@@ -222,8 +217,7 @@ class BenchmarkRunner:
         Generate answer using LLM with retrieved memories as context.
 
         Implements category-specific prompt engineering aligned with A-MEM:
-            - Category 2 (temporal): instruct model to use conversation dates
-            - Category 5 (adversarial): binary choice format
+            - LoCoMo category 2 / LongMemEval category 6 (temporal): use dates
             - Default: short-phrase answer using exact context words
         """
         if not retrieved:
@@ -255,22 +249,15 @@ class BenchmarkRunner:
             ctx_lines.append(" ".join(parts))
         context = "\n".join(ctx_lines)
 
+        # Track context token count for efficiency analysis (whitespace-split approximation)
+        if metrics is not None:
+            metrics.context_token_counts.append(len(context.split()))
+
         if self._llm_client is not None:
             # A-MEM default temperature=0.7; adversarial uses self-configured value
             temperature = 0.7
 
-            if category == 5 and reference:
-                options = ["Not mentioned in the conversation", reference]
-                if random.random() < 0.5:
-                    options.reverse()
-                prompt = _ANSWER_PROMPT_ADVERSARIAL.format(
-                    context=context,
-                    question=question,
-                    option_a=options[0],
-                    option_b=options[1],
-                )
-                temperature = 0.5
-            elif category == 2:
+            if category == 2 or category == 6:
                 prompt = _ANSWER_PROMPT_TEMPORAL.format(
                     context=context,
                     question=question,
@@ -443,6 +430,50 @@ class BenchmarkRunner:
             self._checkpoint_path.unlink()
             logger.info(f"Checkpoint cleared: {self._checkpoint_path}")
 
+    def _save_session_timing(
+        self,
+        session_id: str,
+        session_idx: int,
+        n_turns: int,
+        n_questions: int,
+        phase1_s: float,
+        phase2_s: float,
+        total_s: float,
+        ingest_tokens: int = 0,
+        avg_context_tokens: float = 0.0,
+        avg_retrieval_time_s: float = 0.0,
+    ) -> None:
+        """追加一条样本计时记录到 timing JSON 文件（每个样本完成后立即写入）。"""
+        record = {
+            "session_idx": session_idx,
+            "session_id": session_id,
+            "n_turns": n_turns,
+            "n_questions": n_questions,
+            "phase1_ingest_s": round(phase1_s, 3),
+            "phase2_qa_s": round(phase2_s, 3),
+            "total_s": round(total_s, 3),
+            "ms_per_turn": round(phase1_s / n_turns * 1000, 1) if n_turns else 0.0,
+            "ingest_tokens": ingest_tokens,
+            "ingest_tokens_per_s": round(ingest_tokens / phase1_s, 1) if phase1_s > 0 else 0.0,
+            "avg_context_tokens": round(avg_context_tokens, 1),
+            "avg_retrieval_latency_s": round(avg_retrieval_time_s, 6),
+            "qa_throughput_qps": round(n_questions / phase2_s, 3) if phase2_s > 0 else 0.0,
+        }
+        self._timing_path.parent.mkdir(parents=True, exist_ok=True)
+        existing: list[dict] = []
+        if self._timing_path.exists():
+            try:
+                with open(self._timing_path, "r", encoding="utf-8") as f:
+                    existing = json.load(f)
+            except Exception:
+                existing = []
+        existing.append(record)
+        try:
+            with open(self._timing_path, "w", encoding="utf-8") as f:
+                json.dump(existing, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            logger.warning(f"Failed to save timing record: {e}")
+
     # ── Main run loop ─────────────────────────────────────────────────────
 
     async def run(
@@ -515,8 +546,10 @@ class BenchmarkRunner:
                 f"Session {session_idx + 1}/{len(sessions)} "
                 f"(id={session_id}): {len(dialogue)} turns, {len(questions)} questions"
             )
+            _session_wall_start = time.perf_counter()
 
             # ── Phase 1: Feed dialogue turns ──────────────────────────
+            _phase1_start = time.perf_counter()
             for turn_idx, turn in enumerate(dialogue):
                 raw_text = turn.get("content", "")
                 if not raw_text.strip():
@@ -528,6 +561,9 @@ class BenchmarkRunner:
                 content = f"Speaker {speaker} says: {raw_text}" if speaker else raw_text
                 if date_time:
                     content = f"[{date_time}] {content}"
+
+                # Track tokens ingested per turn (whitespace-split approximation)
+                metrics["PhaseForget"].ingest_token_counts.append(len(content.split()))
 
                 # Self-Retrieval: 在写入新记忆前，先用当前对话内容检索历史记忆，
                 # 模拟"新信息唤起相关记忆"的自然过程，使效用分数在构建阶段就能更新。
@@ -574,6 +610,8 @@ class BenchmarkRunner:
                         metrics["PhaseForget"].memory_usage_mb.append(mem_mb)
 
             # ── Phase 2: Evaluate QA questions ────────────────────────
+            _phase1_elapsed = time.perf_counter() - _phase1_start
+            _phase2_start = time.perf_counter()
             try:
                 await self._system.wait_for_pending_renorm()
             except Exception as e:
@@ -697,6 +735,45 @@ class BenchmarkRunner:
             if mem_mb > 0:
                 for name in all_systems:
                     metrics[name].memory_usage_mb.append(mem_mb)
+
+            _phase2_elapsed = time.perf_counter() - _phase2_start
+            _session_elapsed = time.perf_counter() - _session_wall_start
+            _ms_per_turn = (_phase1_elapsed / len(dialogue) * 1000) if dialogue else 0.0
+            _pf_m = metrics["PhaseForget"]
+            _session_ingest_tokens = sum(
+                _pf_m.ingest_token_counts[-len(dialogue):]
+                if len(_pf_m.ingest_token_counts) >= len(dialogue)
+                else _pf_m.ingest_token_counts
+            )
+            _session_ctx_tokens = (
+                sum(_pf_m.context_token_counts[-len(questions):]
+                    if len(_pf_m.context_token_counts) >= len(questions)
+                    else _pf_m.context_token_counts)
+                / max(len(questions), 1)
+            )
+            _qa_tput = len(questions) / _phase2_elapsed if _phase2_elapsed > 0 else 0.0
+            logger.info(
+                f"[TIMING] session={session_id} "
+                f"total={_session_elapsed:.1f}s  "
+                f"phase1(ingest)={_phase1_elapsed:.1f}s({_ms_per_turn:.0f}ms/turn)  "
+                f"phase2(qa)={_phase2_elapsed:.1f}s({_qa_tput:.2f}q/s)  "
+                f"turns={len(dialogue)} questions={len(questions)}  "
+                f"ingest_tokens={_session_ingest_tokens}  "
+                f"avg_ctx_tokens={_session_ctx_tokens:.0f}  "
+                f"latency={_pf_m.avg_retrieval_time_s:.4f}s"
+            )
+            self._save_session_timing(
+                session_id=session_id,
+                session_idx=session_idx,
+                n_turns=len(dialogue),
+                n_questions=len(questions),
+                phase1_s=_phase1_elapsed,
+                phase2_s=_phase2_elapsed,
+                total_s=_session_elapsed,
+                ingest_tokens=_session_ingest_tokens,
+                avg_context_tokens=_session_ctx_tokens,
+                avg_retrieval_time_s=_pf_m.avg_retrieval_time_s,
+            )
 
             completed_sessions.append(session_id)
             self._save_checkpoint(completed_sessions, metrics)
